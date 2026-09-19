@@ -2,6 +2,11 @@ local h = dofile(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h")
 vim.opt.runtimepath:prepend(h.root)
 package.path = h.root .. "/lua/?.lua;" .. h.root .. "/lua/?/init.lua;" .. package.path
 
+-- ensure real modules (prior tests may have stubbed)
+package.loaded["pi.session"] = nil
+package.loaded["pi.review"] = nil
+package.loaded["pi.config"] = nil
+
 local session = require("pi.session")
 local review = require("pi.review")
 session.reset()

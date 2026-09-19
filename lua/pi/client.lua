@@ -30,8 +30,10 @@ local function handle_line(line)
   end
 end
 
+--- Feed raw stdout bytes. Do NOT invent newlines — large JSONL lines arrive
+--- as partial chunks across on_stdout calls; a false NL corrupts decode.
 function M._feed_for_test(chunk)
-  acc = acc .. chunk
+  acc = acc .. (chunk or "")
   while true do
     local nl = acc:find("\n", 1, true)
     if not nl then
@@ -59,9 +61,18 @@ function M.start(opts)
     cwd = opts.cwd,
     stdout_buffered = false,
     on_stdout = function(_, data)
-      for _, chunk in ipairs(data or {}) do
-        if chunk ~= "" then
+      -- Neovim splits on NL: items[1..n-1] are complete lines; last may be
+      -- partial. Empty last string means the previous item already ended with NL.
+      if type(data) ~= "table" then
+        return
+      end
+      local n = #data
+      for i = 1, n do
+        local chunk = data[i]
+        if i < n then
           M._feed_for_test(chunk .. "\n")
+        elseif chunk ~= "" then
+          M._feed_for_test(chunk)
         end
       end
     end,
@@ -98,7 +109,6 @@ function M.request(obj, timeout_ms)
   obj.id = id
   local co = coroutine.running()
   if not co then
-    -- synchronous wait via vim.wait
     local result
     pending[id] = {
       resolve = function(r)

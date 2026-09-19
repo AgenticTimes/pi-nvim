@@ -2,7 +2,7 @@
  * Host tools for Neovim: replace/read via extension_ui bridge.
  * Spawn with:
  *   pi --mode rpc --no-extensions --no-builtin-tools \
- *     -t nvim_replace_in_buffer,nvim_read_buffer \
+ *     -t nvim_replace_in_buffer,nvim_read_buffer,nvim_open,nvim_goto \
  *     -e ./extensions/nvim_host_tools.ts
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -51,6 +51,56 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, p, _s, _u, ctx) {
       const op = { op: "read_buffer", path: p.path };
+      const raw = await ctx.ui.input(HOST_TITLE, JSON.stringify(op));
+      if (raw === undefined) {
+        return {
+          content: [{ type: "text", text: "host cancelled" }],
+          details: { ok: false },
+        };
+      }
+      return {
+        content: [{ type: "text", text: String(raw) }],
+        details: { ok: true },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "nvim_open",
+    label: "nvim_open",
+    description: "Open a file in Neovim (host) and optionally jump to a line.",
+    parameters: Type.Object({
+      path: Type.String({ description: "File path relative to cwd or absolute" }),
+      line: Type.Optional(Type.Number({ description: "1-based line number" })),
+      col: Type.Optional(Type.Number({ description: "0-based column" })),
+    }),
+    async execute(_id, p, _s, _u, ctx) {
+      const op = { op: "open", path: p.path, line: p.line, col: p.col };
+      const raw = await ctx.ui.input(HOST_TITLE, JSON.stringify(op));
+      if (raw === undefined) {
+        return {
+          content: [{ type: "text", text: "host cancelled" }],
+          details: { ok: false },
+        };
+      }
+      return {
+        content: [{ type: "text", text: String(raw) }],
+        details: { ok: true },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "nvim_goto",
+    label: "nvim_goto",
+    description: "Jump cursor to path:line in Neovim (reuse window if already open).",
+    parameters: Type.Object({
+      path: Type.String({ description: "File path relative to cwd or absolute" }),
+      line: Type.Optional(Type.Number({ description: "1-based line number" })),
+      col: Type.Optional(Type.Number({ description: "0-based column" })),
+    }),
+    async execute(_id, p, _s, _u, ctx) {
+      const op = { op: "goto", path: p.path, line: p.line, col: p.col };
       const raw = await ctx.ui.input(HOST_TITLE, JSON.stringify(op));
       if (raw === undefined) {
         return {

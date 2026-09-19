@@ -11,11 +11,9 @@ end
 function M.buffer_for(path)
   local abs = norm(path)
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_loaded(b) then
-      local name = vim.api.nvim_buf_get_name(b)
-      if name ~= "" and norm(name) == abs then
-        return b
-      end
+    local name = vim.api.nvim_buf_get_name(b)
+    if name ~= "" and norm(name) == abs then
+      return b
     end
   end
   return nil
@@ -23,18 +21,21 @@ end
 
 function M.ensure_buf(path)
   local b = M.buffer_for(path)
-  if b then
-    return b
+  if not b then
+    local abs = norm(path)
+    vim.cmd("badd " .. vim.fn.fnameescape(abs))
+    b = M.buffer_for(path)
+  end
+  if not b then
+    return nil
+  end
+  if not vim.api.nvim_buf_is_loaded(b) then
+    vim.fn.bufload(b)
   end
   local abs = norm(path)
-  vim.cmd("badd " .. vim.fn.fnameescape(abs))
-  b = M.buffer_for(path)
-  if b then
-    vim.fn.bufload(b)
-    if vim.api.nvim_buf_line_count(b) == 1 and vim.api.nvim_buf_get_lines(b, 0, 1, false)[1] == "" then
-      if vim.fn.filereadable(abs) == 1 then
-        vim.api.nvim_buf_set_lines(b, 0, -1, false, vim.fn.readfile(abs))
-      end
+  if vim.api.nvim_buf_line_count(b) == 1 and vim.api.nvim_buf_get_lines(b, 0, 1, false)[1] == "" then
+    if vim.fn.filereadable(abs) == 1 then
+      vim.api.nvim_buf_set_lines(b, 0, -1, false, vim.fn.readfile(abs))
     end
   end
   return b
@@ -114,6 +115,56 @@ function M.apply(op)
       changed_row = changed_row,
     })
     return true, "edited " .. rel
+  end
+
+  if op.op == "open" then
+    local path = op.path
+    if not path then
+      return false, "no path"
+    end
+    if not tostring(path):match("^/") then
+      path = vim.fn.getcwd() .. "/" .. path
+    end
+    local b = M.ensure_buf(path)
+    if not b then
+      return false, "no buffer"
+    end
+    local line = tonumber(op.line) or 1
+    local col = tonumber(op.col) or 0
+    vim.cmd("buffer " .. b)
+    pcall(vim.api.nvim_win_set_cursor, 0, { math.max(1, line), math.max(0, col) })
+    return true, "opened " .. vim.fn.fnamemodify(path, ":.")
+  end
+
+  if op.op == "goto" then
+    local path = op.path
+    if not path then
+      return false, "no path"
+    end
+    if not tostring(path):match("^/") then
+      path = vim.fn.getcwd() .. "/" .. path
+    end
+    local b = M.ensure_buf(path)
+    if not b then
+      return false, "no buffer"
+    end
+    local line = tonumber(op.line) or 1
+    local col = tonumber(op.col) or 0
+    -- prefer existing window showing this buf
+    local target_win
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_get_buf(w) == b then
+        target_win = w
+        break
+      end
+    end
+    if target_win then
+      vim.api.nvim_set_current_win(target_win)
+    else
+      vim.cmd("buffer " .. b)
+    end
+    pcall(vim.api.nvim_win_set_cursor, 0, { math.max(1, line), math.max(0, col) })
+    return true, string.format("goto %s:%d", vim.fn.fnamemodify(path, ":."), line)
   end
 
   return false, "unknown op " .. tostring(op.op)

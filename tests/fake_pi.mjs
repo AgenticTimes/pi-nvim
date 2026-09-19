@@ -79,4 +79,33 @@ rl.on("line", (line) => {
   if (msg.type === "abort") {
     emit({ type: "agent_end" });
   }
+
+  if (msg.type === "steer" || msg.type === "follow_up") {
+    emit({
+      type: "response",
+      id: msg.id || msg.type,
+      command: msg.type,
+      success: true,
+    });
+  }
+
+  if (msg.type === "cycle_model") {
+    emit({
+      type: "response",
+      id: msg.id || "cycle-model",
+      command: "cycle_model",
+      success: true,
+      data: { model: { id: "fake-model" }, thinkingLevel: "off", isScoped: false },
+    });
+  }
+
+  if (msg.type === "cycle_thinking_level") {
+    emit({
+      type: "response",
+      id: msg.id || "cycle-think",
+      command: "cycle_thinking_level",
+      success: true,
+      data: { level: "high" },
+    });
+  }
 });

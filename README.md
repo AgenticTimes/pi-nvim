@@ -4,6 +4,10 @@ Neovim-native frontend for [pi](https://github.com/earendil-works/pi) coding age
 
 **Wave 1:** chat/input UI · `pi --mode rpc` · host tools (`nvim_replace_in_buffer` / `nvim_read_buffer`) · multi-file review with **Accept / Reject**.
 
+**Wave 2:** busy steer/follow-up · history · model/thinking · fullscreen · session picker · slash `/` · Tab · `]]`/`[[` · Accept/Reject all · `:PiRun` · `nvim_open`/`nvim_goto`.
+
+**Wave 3:** approve modes (`ask`/`smart`/`auto`/`deny` + Always) · `#` skills · hunk `ah`/`rh`/`]h`/`[h` · `:PiExportHtml` · `:PiInspect` · `@visible` · chat/auto · focus · session name · **resume last session** (same cwd).
+
 ## Requirements
 
 - Neovim ≥ 0.10
@@ -33,10 +37,25 @@ Neovim-native frontend for [pi](https://github.com/earendil-works/pi) coding age
 | `:PiNewSession` | New session |
 | `:PiDiff` | Open review |
 | `:PiAccept` / `:PiReject` | Accept / reject current pending file |
+| `:PiCycleModel` | Cycle model |
+| `:PiCycleThinking` | Cycle thinking level |
+| `:PiFullscreen` | Toggle fullscreen chat |
+| `:PiSessions` | Pick session for cwd (also hydrates chat) |
+| `:PiRun {msg}` | Open UI + prompt |
+| `:PiAcceptAll` / `:PiRejectAll` | Accept / reject all pending |
+| `:PiSlash` | Pick slash command |
 
-In review buffers: `a` accept (write + remove from list), `r` reject (restore), `]f`/`[f` next/prev file.
+On first open (`,ai`), if `resume_last = true` (default), switches to the newest session for the current cwd and fills the chat from history. `,aI` / `:PiNewSession` always starts fresh.
 
-Default toggle: `<leader>ai`.
+In review buffers: `a` accept, `r` reject, `]f`/`[f` next/prev.
+
+In chat: `<CR>` open ask popup · `]]`/`[[` next/prev message · `q` close · `<Tab>` toggle ask.
+
+In ask popup: `<CR>` newline · `<C-CR>` / `<D-CR>` submit · normal-mode `<CR>` submit · `<Esc>` close popup · `<C-c>` abort · `<Up>`/`<Down>` history · empty `/` slash · `@` mention · empty `#` skills.
+
+Suggested keys: `<leader>ai` toggle (auto-resume) · `<leader>aI` new session · `<leader>as` sessions · `<leader>av` inspect · `<leader>ap` approve mode · `<leader>ah` export HTML · `<leader>ae` focus · `<leader>ac` chat/auto · `<leader>an` name · `<leader>am`/`at` model/thinking · `<leader>aF` fullscreen · `<leader>aA`/`aR` accept/reject all.
+
+Placeholders in prompts: `@this` `@buffer` `@visible` `@diagnostics` · empty `/` slash · empty `#` skills.
 
 ## Tests
 

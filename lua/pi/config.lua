@@ -3,23 +3,43 @@ local M = {}
 M.opts = {
   executable = "pi",
   window = {
-    width = 0.4,
-    height = 0.9,
-    border = "rounded",
-    layout = "right",
+    width = 1.0,
+    height = 1.0,
+    border = "none",
+    layout = "full",
+    min_width = 56,
   },
   keys = {
     toggle = "<leader>ai",
-    submit = "<CR>",
+    submit = "<CR>", -- normal-mode submit; insert uses submit_insert (terminals alias S-CR→CR)
+    submit_insert = "<C-CR>", -- Ctrl+Enter submits from insert
+    newline = "<CR>", -- Enter / Shift+Enter → new line in insert (see input.setup)
     abort = "<C-c>",
     accept = "a",
     reject = "r",
     next_file = "]f",
     prev_file = "[f",
     mention = "@",
+    history_prev = "<Up>",
+    history_next = "<Down>",
+    steer = "<C-s>",
+    slash = "/",
+    skill = "#",
+    focus_cycle = "<Tab>",
+    next_message = "]]",
+    prev_message = "[[",
   },
   write_on_accept = true,
   rpc_timeout = 30,
+  busy_submit = "steer", -- "steer" | "followUp" when agent is streaming
+  --- "auto" = host tools enabled; "chat" = --no-tools (no tool calls)
+  mode = "auto",
+  --- confirm dialogs: ask | smart | auto | deny
+  approve = "ask",
+  --- after export_html, open the file (edit / system open)
+  export_open = true,
+  --- on first RPC start, switch to newest session for cwd and hydrate chat
+  resume_last = true,
 }
 
 function M.setup(opts)
