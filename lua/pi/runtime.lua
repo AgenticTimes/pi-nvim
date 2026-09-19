@@ -41,8 +41,7 @@ function M.ensure_started(opts)
       "-e",
       ext,
     }
-  if opts.no_session ~= false and not opts.keep_session then
-    -- insert after "rpc"
+  if opts.no_session then
     table.insert(cmd, 4, "--no-session")
   end
   client.start({
