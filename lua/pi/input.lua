@@ -37,30 +37,31 @@ function M.setup(b, on_close)
     vim.api.nvim_win_set_cursor(0, { row + 1, 0 })
   end
 
-  -- Drop stale insert-<CR> submit maps from older sessions (buffer is long-lived)
-  pcall(vim.keymap.del, "i", "<CR>", { buffer = b })
-  pcall(vim.keymap.del, "i", "<S-CR>", { buffer = b })
-  pcall(vim.keymap.del, "i", "<C-CR>", { buffer = b })
-  pcall(vim.keymap.del, { "n", "i" }, k.submit or "<CR>", { buffer = b })
-
-  -- Normal: Enter submits. Insert: Enter/Shift+Enter newline (many terminals
-  -- send the same <CR> for both — so insert must NOT map <CR> to submit).
-  vim.keymap.set("n", k.submit or "<CR>", function()
-    M.submit()
-  end, opts)
-  local submit_i = k.submit_insert or "<C-CR>"
-  vim.keymap.set("i", submit_i, function()
-    M.submit()
-  end, opts)
-  -- also allow Cmd+Enter in GUI / Neovide
-  vim.keymap.set("i", "<D-CR>", function()
-    M.submit()
-  end, opts)
-  vim.keymap.set("i", "<CR>", insert_newline, opts)
-  vim.keymap.set("i", "<S-CR>", insert_newline, opts)
-  if k.newline and k.newline ~= "<CR>" and k.newline ~= "<S-CR>" then
-    vim.keymap.set("i", k.newline, insert_newline, opts)
+  -- Clear stale maps from older sessions (pi://input is long-lived)
+  for _, lhs in ipairs({ "<CR>", "<S-CR>", "<C-CR>", "<D-CR>", "<M-CR>", "<C-j>", "<NL>" }) do
+    pcall(vim.keymap.del, "i", lhs, { buffer = b })
+    pcall(vim.keymap.del, "n", lhs, { buffer = b })
   end
+
+  -- Enter submits in normal + insert (Ctrl/Shift+Enter are unreliable in terminals)
+  vim.keymap.set({ "n", "i" }, k.submit or "<CR>", function()
+    M.submit()
+  end, opts)
+  -- Extra submit chords for GUI / kitty keyboard-protocol terminals
+  for _, lhs in ipairs({ "<C-CR>", "<M-CR>", "<D-CR>" }) do
+    vim.keymap.set("i", lhs, function()
+      M.submit()
+    end, opts)
+  end
+
+  -- Portable newline: Ctrl+J (almost all terminals). Also S-CR when distinct.
+  local nl = k.newline or "<C-j>"
+  vim.keymap.set("i", nl, insert_newline, opts)
+  if nl ~= "<C-j>" then
+    vim.keymap.set("i", "<C-j>", insert_newline, opts)
+  end
+  vim.keymap.set("i", "<S-CR>", insert_newline, opts)
+  vim.keymap.set("i", "<NL>", insert_newline, opts)
 
   vim.keymap.set({ "n", "i" }, k.abort, function()
     M.abort()

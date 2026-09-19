@@ -51,7 +51,7 @@ In review buffers: `a` accept, `r` reject, `]f`/`[f` next/prev.
 
 In chat: `<CR>` open ask popup · `]]`/`[[` next/prev message · `q` close · `<Tab>` toggle ask.
 
-In ask popup: `<CR>` newline · `<C-CR>` / `<D-CR>` submit · normal-mode `<CR>` submit · `<Esc>` close popup · `<C-c>` abort · `<Up>`/`<Down>` history · empty `/` slash · `@` mention · empty `#` skills.
+In ask popup: `<CR>` submit · `<C-j>` newline · `<Esc>` close popup · `<C-c>` abort · `<Up>`/`<Down>` history · empty `/` slash · `@` mention · empty `#` skills.
 
 Suggested keys: `<leader>ai` toggle (auto-resume) · `<leader>aI` new session · `<leader>as` sessions · `<leader>av` inspect · `<leader>ap` approve mode · `<leader>ah` export HTML · `<leader>ae` focus · `<leader>ac` chat/auto · `<leader>an` name · `<leader>am`/`at` model/thinking · `<leader>aF` fullscreen · `<leader>aA`/`aR` accept/reject all.
 

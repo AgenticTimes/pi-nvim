@@ -11,9 +11,8 @@ M.opts = {
   },
   keys = {
     toggle = "<leader>ai",
-    submit = "<CR>", -- normal-mode submit; insert uses submit_insert (terminals alias S-CR→CR)
-    submit_insert = "<C-CR>", -- Ctrl+Enter submits from insert
-    newline = "<CR>", -- Enter / Shift+Enter → new line in insert (see input.setup)
+    submit = "<CR>", -- Enter submits (n + i); terminals rarely send distinct C-CR / S-CR
+    newline = "<C-j>", -- Ctrl+J inserts newline (portable); S-CR also when terminal supports it
     abort = "<C-c>",
     accept = "a",
     reject = "r",
