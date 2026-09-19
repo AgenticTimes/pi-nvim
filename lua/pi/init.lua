@@ -42,8 +42,16 @@ function M.cycle_model()
   return require("pi.runtime").cycle_model()
 end
 
+function M.pick_model()
+  return require("pi.runtime").pick_model()
+end
+
 function M.cycle_thinking()
   return require("pi.runtime").cycle_thinking()
+end
+
+function M.pick_thinking()
+  return require("pi.runtime").pick_thinking()
 end
 
 function M.toggle_fullscreen()

@@ -141,5 +141,32 @@ h.assert_eq(#after, 3, "split into 3 lines")
 h.assert_eq(after[1], "line-a", "a")
 h.assert_eq(after[3], "line-c", "c")
 
+-- API errors surface in chat (previously looked like silent no-response)
+render.on_event(b, { type = "agent_start" })
+render.on_event(b, {
+  type = "agent_end",
+  messages = {
+    {
+      role = "assistant",
+      content = {},
+      stopReason = "error",
+      errorMessage = "OpenAI API error (401): Incorrect API key",
+    },
+  },
+})
+lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
+joined = table.concat(lines, "\n")
+h.assert_truthy(joined:find("### error", 1, true), "error header")
+h.assert_truthy(joined:find("401", 1, true), "error body")
+
+render.on_event(b, { type = "agent_start" })
+render.on_event(b, {
+  type = "message_update",
+  assistantMessageEvent = { type = "error", errorMessage = "stream boom" },
+})
+lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
+joined = table.concat(lines, "\n")
+h.assert_truthy(joined:find("stream boom", 1, true), "stream error text")
+
 pcall(vim.api.nvim_win_close, win, true)
 pcall(vim.api.nvim_win_close, other, true)

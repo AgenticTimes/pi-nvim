@@ -426,6 +426,27 @@ function M.on_event(buf, ev)
   if ev.type == "agent_end" then
     streaming_assistant = false
     last_tool = nil
+    -- Surface API / model failures (e.g. 401) that produced no text_delta
+    local msgs = ev.messages
+    if type(msgs) == "table" then
+      for i = #msgs, 1, -1 do
+        local raw = msgs[i]
+        local m = type(raw) == "table" and (raw.message or raw) or nil
+        if type(m) == "table" and m.role == "assistant" then
+          if m.stopReason == "error" or (m.errorMessage and m.errorMessage ~= "") then
+            local err = m.errorMessage or "assistant stopped with error"
+            M.append(buf, "### error")
+            for line in (tostring(err) .. "\n"):gmatch("(.-)\n") do
+              M.append(buf, line)
+            end
+            vim.schedule(function()
+              vim.notify("pi: " .. tostring(err):sub(1, 200), vim.log.levels.ERROR)
+            end)
+          end
+          break
+        end
+      end
+    end
     schedule_follow(buf)
     return
   end
@@ -435,6 +456,18 @@ function M.on_event(buf, ev)
     if a.type == "text_delta" and a.delta then
       ensure_assistant_header(buf)
       append_text_delta(buf, a.delta)
+    elseif a.type == "thinking_delta" and a.delta then
+      -- optional: show thinking lightly; skip for now to avoid noise
+    elseif a.type == "error" then
+      local err = a.errorMessage or a.message or a.error or "assistant error"
+      M.append(buf, "### error")
+      for line in (tostring(err) .. "\n"):gmatch("(.-)\n") do
+        M.append(buf, line)
+      end
+      streaming_assistant = false
+      vim.schedule(function()
+        vim.notify("pi: " .. tostring(err):sub(1, 200), vim.log.levels.ERROR)
+      end)
     elseif a.type == "text_end" or a.type == "done" then
       streaming_assistant = false
       schedule_follow(buf)

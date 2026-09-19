@@ -67,6 +67,39 @@ local function on_event(ev)
     end)
   end
 
+  if ev.type == "response" and ev.command == "set_model" then
+    if ev.success then
+      local m = ev.data and (ev.data.model or ev.data) or {}
+      local label = (m.provider and m.id) and (m.provider .. "/" .. m.id) or vim.inspect(m):sub(1, 80)
+      vim.schedule(function()
+        vim.notify("pi: model → " .. label, vim.log.levels.INFO)
+        pcall(function()
+          require("pi.ui").refresh_title()
+        end)
+      end)
+    else
+      vim.schedule(function()
+        vim.notify("pi: set_model failed: " .. tostring(ev.error or "?"), vim.log.levels.ERROR)
+      end)
+    end
+  end
+
+  if ev.type == "response" and ev.command == "set_thinking_level" then
+    if ev.success then
+      local level = ev.data and (ev.data.level or ev.data) or "?"
+      vim.schedule(function()
+        vim.notify("pi: thinking → " .. tostring(level), vim.log.levels.INFO)
+        pcall(function()
+          require("pi.ui").refresh_title()
+        end)
+      end)
+    else
+      vim.schedule(function()
+        vim.notify("pi: set_thinking_level failed: " .. tostring(ev.error or "?"), vim.log.levels.ERROR)
+      end)
+    end
+  end
+
   -- Async hydrate via RPC (fallback only)
   if ev.type == "response" and ev.id == HYDRATE_ID then
     local opts = hydrate_opts or { footer = "· resumed session" }
@@ -317,6 +350,118 @@ function M.cycle_thinking()
   M.ensure_started()
   require("pi.client").send({ type = "cycle_thinking_level", id = "cycle-think" })
   vim.notify("pi: cycling thinking…", vim.log.levels.INFO)
+end
+
+local function model_label(m)
+  local prov = m.provider or "?"
+  local id = m.id or "?"
+  local name = m.name
+  if name and name ~= "" and name ~= id then
+    return string.format("%s/%s  · %s", prov, id, name)
+  end
+  return string.format("%s/%s", prov, id)
+end
+
+--- Fuzzy-pick a model (get_available_models → vim.ui.select → set_model)
+function M.pick_model()
+  M.ensure_started()
+  local client = require("pi.client")
+  local resp, err = client.request({ type = "get_available_models", id = "get-models" }, 15000)
+  if not resp or not resp.success then
+    vim.notify("pi: get_available_models failed: " .. tostring(err or (resp and resp.error) or "?"), vim.log.levels.ERROR)
+    return
+  end
+  local models = (resp.data and resp.data.models) or {}
+  if #models == 0 then
+    vim.notify("pi: no models available", vim.log.levels.WARN)
+    return
+  end
+
+  local cur = require("pi.session").get().model
+  local cur_id = type(cur) == "table" and cur.id or cur
+  local cur_prov = type(cur) == "table" and cur.provider or nil
+
+  table.sort(models, function(a, b)
+    local ac = a.id == cur_id and (not cur_prov or a.provider == cur_prov)
+    local bc = b.id == cur_id and (not cur_prov or b.provider == cur_prov)
+    if ac ~= bc then
+      return ac
+    end
+    if tostring(a.provider) ~= tostring(b.provider) then
+      return tostring(a.provider) < tostring(b.provider)
+    end
+    return tostring(a.id) < tostring(b.id)
+  end)
+
+  local labels = {}
+  local by_label = {}
+  for _, m in ipairs(models) do
+    local label = model_label(m)
+    if m.id == cur_id and (not cur_prov or m.provider == cur_prov) then
+      label = "● " .. label
+    end
+    -- disambiguate duplicate labels
+    if by_label[label] then
+      label = label .. " #" .. tostring(#labels + 1)
+    end
+    table.insert(labels, label)
+    by_label[label] = m
+  end
+
+  vim.ui.select(labels, { prompt = "pi model" }, function(item)
+    if not item then
+      return
+    end
+    local m = by_label[item]
+    if not m or not m.id or not m.provider then
+      vim.notify("pi: invalid model selection", vim.log.levels.WARN)
+      return
+    end
+    client.send({
+      type = "set_model",
+      provider = m.provider,
+      modelId = m.id,
+      id = "set-model",
+    })
+  end)
+end
+
+--- Fuzzy-pick thinking level for current model
+function M.pick_thinking()
+  M.ensure_started()
+  local client = require("pi.client")
+  local resp, err = client.request({ type = "get_available_thinking_levels", id = "get-think" }, 10000)
+  if not resp or not resp.success then
+    vim.notify("pi: get_available_thinking_levels failed: " .. tostring(err or (resp and resp.error) or "?"), vim.log.levels.ERROR)
+    return
+  end
+  local levels = (resp.data and resp.data.levels) or resp.data or {}
+  if type(levels) ~= "table" or #levels == 0 then
+    vim.notify("pi: no thinking levels for this model", vim.log.levels.WARN)
+    return
+  end
+
+  local cur = require("pi.session").get().thinking
+  local labels = {}
+  for _, lv in ipairs(levels) do
+    local s = tostring(lv)
+    if cur and tostring(cur) == s then
+      s = "● " .. s
+    end
+    table.insert(labels, s)
+  end
+
+  vim.ui.select(labels, { prompt = "pi thinking" }, function(item)
+    if not item then
+      return
+    end
+    local level = item:gsub("^●%s*", "")
+    client.send({
+      type = "set_thinking_level",
+      level = level,
+      id = "set-think",
+    })
+  end)
 end
 
 --- Toggle chat (no tools) vs auto (host tools). Restarts RPC job.

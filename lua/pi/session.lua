@@ -100,7 +100,11 @@ function M.on_event(ev)
     state.status = "idle"
   elseif ev.type == "response" and ev.command == "cycle_model" and ev.data then
     state.model = ev.data.model or ev.data
+  elseif ev.type == "response" and ev.command == "set_model" and ev.data then
+    state.model = ev.data.model or ev.data
   elseif ev.type == "response" and ev.command == "cycle_thinking_level" and ev.data then
+    state.thinking = ev.data.level or ev.data
+  elseif ev.type == "response" and ev.command == "set_thinking_level" and ev.data then
     state.thinking = ev.data.level or ev.data
   end
 end

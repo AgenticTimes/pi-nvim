@@ -31,9 +31,17 @@ vim.api.nvim_create_user_command("PiCycleModel", function()
   require("pi.runtime").cycle_model()
 end, { desc = "Cycle pi model" })
 
+vim.api.nvim_create_user_command("PiPickModel", function()
+  require("pi.runtime").pick_model()
+end, { desc = "Pick pi model" })
+
 vim.api.nvim_create_user_command("PiCycleThinking", function()
   require("pi.runtime").cycle_thinking()
 end, { desc = "Cycle pi thinking level" })
+
+vim.api.nvim_create_user_command("PiPickThinking", function()
+  require("pi.runtime").pick_thinking()
+end, { desc = "Pick pi thinking level" })
 
 vim.api.nvim_create_user_command("PiFullscreen", function()
   require("pi.ui").toggle_fullscreen()

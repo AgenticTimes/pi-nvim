@@ -36,13 +36,34 @@ local function selection_text()
 end
 
 function M.gather()
-  local path = vim.api.nvim_buf_get_name(0)
+  -- Prefer real editor file behind pi floats (ask/chat current buf is pi://*)
+  local path
+  local ok_ui, ui = pcall(require, "pi.ui")
+  if ok_ui and ui.editor_path then
+    path = ui.editor_path()
+  end
+  if not path then
+    local name = vim.api.nvim_buf_get_name(0)
+    if name ~= "" and not name:match("^pi://") then
+      path = name
+    end
+  end
   local diags = {}
-  for _, d in ipairs(vim.diagnostic.get(0)) do
+  -- diagnostics from editor buf when we can resolve it
+  local diag_buf = 0
+  if path then
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_get_name(b) == path then
+        diag_buf = b
+        break
+      end
+    end
+  end
+  for _, d in ipairs(vim.diagnostic.get(diag_buf)) do
     table.insert(diags, string.format("L%d: %s", d.lnum + 1, d.message))
   end
   return {
-    file = path ~= "" and path or nil,
+    file = path,
     selection = selection_text(),
     diagnostics = diags,
   }

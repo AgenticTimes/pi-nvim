@@ -25,12 +25,33 @@ rl.on("line", (line) => {
   }
 
   if (msg.id && msg.type) {
+    let data;
+    if (msg.type === "get_state") {
+      data = { status: "idle" };
+    } else if (msg.type === "get_available_models") {
+      data = {
+        models: [
+          { id: "fake-a", provider: "test", name: "Fake A" },
+          { id: "fake-b", provider: "test", name: "Fake B" },
+        ],
+      };
+    } else if (msg.type === "set_model") {
+      data = { id: msg.modelId, provider: msg.provider, name: msg.modelId };
+    } else if (msg.type === "get_available_thinking_levels") {
+      data = { levels: ["off", "low", "high"] };
+    } else if (msg.type === "set_thinking_level") {
+      data = { level: msg.level };
+    } else if (msg.type === "cycle_model") {
+      data = { model: { id: "fake-model" }, thinkingLevel: "off", isScoped: false };
+    } else if (msg.type === "cycle_thinking_level") {
+      data = { level: "high" };
+    }
     emit({
       type: "response",
       id: msg.id,
       command: msg.type,
       success: true,
-      data: msg.type === "get_state" ? { status: "idle" } : undefined,
+      data,
     });
   }
 
@@ -89,20 +110,20 @@ rl.on("line", (line) => {
     });
   }
 
-  if (msg.type === "cycle_model") {
+  if (msg.type === "cycle_model" && !msg.id) {
     emit({
       type: "response",
-      id: msg.id || "cycle-model",
+      id: "cycle-model",
       command: "cycle_model",
       success: true,
       data: { model: { id: "fake-model" }, thinkingLevel: "off", isScoped: false },
     });
   }
 
-  if (msg.type === "cycle_thinking_level") {
+  if (msg.type === "cycle_thinking_level" && !msg.id) {
     emit({
       type: "response",
-      id: msg.id || "cycle-think",
+      id: "cycle-think",
       command: "cycle_thinking_level",
       success: true,
       data: { level: "high" },

@@ -76,6 +76,71 @@ sent = {}
 runtime.cycle_thinking()
 h.assert_eq(sent[1].type, "cycle_thinking_level", "cycle_thinking")
 
+-- pick_model: list → select → set_model
+sent = {}
+package.loaded["pi.client"] = {
+  is_running = function()
+    return true
+  end,
+  start = function() end,
+  send = function(o)
+    table.insert(sent, o)
+  end,
+  request = function(o)
+    if o.type == "get_available_models" then
+      return {
+        success = true,
+        data = {
+          models = {
+            { id = "m-cur", provider = "p", name = "Current" },
+            { id = "m-next", provider = "p", name = "Next" },
+          },
+        },
+      }
+    end
+    if o.type == "get_available_thinking_levels" then
+      return { success = true, data = { levels = { "off", "high" } } }
+    end
+    return { success = false, error = "unexpected " .. tostring(o.type) }
+  end,
+  set_on_event = function() end,
+  stop = function() end,
+}
+package.loaded["pi.runtime"] = nil
+runtime = require("pi.runtime")
+session.on_event({
+  type = "response",
+  command = "set_model",
+  data = { id = "m-cur", provider = "p" },
+})
+local orig_select = vim.ui.select
+vim.ui.select = function(items, _opts, cb)
+  h.assert_truthy(#items >= 2, "model list")
+  -- pick the non-current entry
+  local pick = items[2]
+  for _, it in ipairs(items) do
+    if not tostring(it):find("●", 1, true) then
+      pick = it
+      break
+    end
+  end
+  cb(pick)
+end
+runtime.pick_model()
+vim.ui.select = orig_select
+h.assert_eq(sent[1].type, "set_model", "set_model sent")
+h.assert_eq(sent[1].modelId, "m-next", "picked next model")
+h.assert_eq(sent[1].provider, "p", "provider")
+
+sent = {}
+vim.ui.select = function(items, _opts, cb)
+  cb(items[2] or items[1])
+end
+runtime.pick_thinking()
+vim.ui.select = orig_select
+h.assert_eq(sent[1].type, "set_thinking_level", "set_thinking sent")
+h.assert_eq(sent[1].level, "high", "picked high")
+
 -- session stores model/thinking from responses
 session.on_event({
   type = "response",
@@ -89,6 +154,19 @@ session.on_event({
   data = { level = "medium" },
 })
 h.assert_eq(session.get().thinking, "medium", "thinking stored")
+
+session.on_event({
+  type = "response",
+  command = "set_model",
+  data = { id = "m2", provider = "x" },
+})
+h.assert_eq(session.get().model.id, "m2", "set_model stored")
+session.on_event({
+  type = "response",
+  command = "set_thinking_level",
+  data = { level = "low" },
+})
+h.assert_eq(session.get().thinking, "low", "set_thinking stored")
 
 -- unstub for subsequent tests
 package.loaded["pi.client"] = nil
