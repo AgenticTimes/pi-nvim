@@ -51,6 +51,7 @@ local function configure_chat_win(win)
   vim.wo[win].linebreak = true
   vim.wo[win].breakindent = true
   vim.wo[win].showbreak = "↪ "
+  vim.wo[win].signcolumn = "yes:1"
   -- Opaque: global NormalFloat is often transparent (theme), which shows the editor through
   pcall(function()
     vim.wo[win].winhl = "Normal:PiChatNormal,NormalFloat:PiChatNormal,FloatBorder:PiChatBorder"
@@ -60,12 +61,89 @@ local function configure_chat_win(win)
   end)
 end
 
+local function configure_ask_win(win)
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+  pcall(function()
+    vim.wo[win].winhl = "Normal:PiAskNormal,NormalFloat:PiAskNormal,FloatBorder:PiAskBorder"
+  end)
+end
+
+local function adj_bg(c, delta)
+  if type(c) ~= "number" then
+    return nil
+  end
+  local r = math.floor(c / 65536) % 256
+  local g = math.floor(c / 256) % 256
+  local b = c % 256
+  local function clamp(x)
+    return math.max(0, math.min(255, x + delta))
+  end
+  return clamp(r) * 65536 + clamp(g) * 256 + clamp(b)
+end
+
+local function muted_fg(fg)
+  -- Secondary text: ~70% of Normal fg, floored so it stays readable on dark themes
+  if type(fg) ~= "number" then
+    return 0xa9b1d6
+  end
+  local r = math.floor(fg / 65536) % 256
+  local g = math.floor(fg / 256) % 256
+  local b = fg % 256
+  local function tone(c)
+    return math.max(0x88, math.min(255, math.floor(c * 0.72 + 0x28)))
+  end
+  return tone(r) * 65536 + tone(g) * 256 + tone(b)
+end
+
+local hl_autocmd ---@type integer|nil
 local function ensure_hl()
   local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
   local bg = normal.bg or 0x1e1e1e
   local fg = normal.fg or 0xffffff
+  local ask_bg = adj_bg(bg, 12) or bg
+  local think_fg = muted_fg(fg)
+  local comment = vim.api.nvim_get_hl(0, { name = "Comment", link = false })
+  if type(comment.fg) == "number" then
+    -- prefer Comment if it is already brighter than our floor
+    local cr = math.floor(comment.fg / 65536) % 256
+    local cg = math.floor(comment.fg / 256) % 256
+    local cb = comment.fg % 256
+    if (cr + cg + cb) / 3 >= 0x88 then
+      think_fg = comment.fg
+    end
+  end
   vim.api.nvim_set_hl(0, "PiChatNormal", { bg = bg, fg = fg })
-  vim.api.nvim_set_hl(0, "PiChatBorder", { bg = bg, fg = fg })
+  vim.api.nvim_set_hl(0, "PiChatBorder", { bg = bg, fg = muted_fg(fg) })
+  vim.api.nvim_set_hl(0, "PiAskNormal", { bg = ask_bg, fg = fg })
+  vim.api.nvim_set_hl(0, "PiAskBorder", { bg = ask_bg, fg = 0x7aa2f7, bold = true })
+  local bubble_bg = adj_bg(bg, 18) or bg
+  vim.api.nvim_set_hl(0, "PiYou", { fg = 0x7aa2f7, bold = true, bg = bg })
+  vim.api.nvim_set_hl(0, "PiYouBar", { fg = 0x7aa2f7, bg = bg })
+  vim.api.nvim_set_hl(0, "PiYouBubble", { bg = bubble_bg, fg = fg })
+  vim.api.nvim_set_hl(0, "PiYouBorder", { fg = 0x7aa2f7, bg = bubble_bg })
+  -- tool calls: violet, squarer box than user turns
+  local tool_bg = adj_bg(bg, 12) or bg
+  vim.api.nvim_set_hl(0, "PiToolBar", { fg = 0xbb9af7, bg = bg })
+  vim.api.nvim_set_hl(0, "PiToolBubble", { bg = tool_bg })
+  vim.api.nvim_set_hl(0, "PiToolBorder", { fg = 0xbb9af7, bg = tool_bg })
+  -- thinking: muted, dashed box, bg only so the PiThinking italic text hl wins
+  local think_bg = adj_bg(bg, 5) or bg
+  vim.api.nvim_set_hl(0, "PiThinkBar", { fg = think_fg, bg = bg })
+  vim.api.nvim_set_hl(0, "PiThinkBubble", { bg = think_bg })
+  vim.api.nvim_set_hl(0, "PiThinkBorder", { fg = think_fg, bg = think_bg })
+  vim.api.nvim_set_hl(0, "PiAssistant", { fg = 0x9ece6a, bold = true, bg = bg })
+  vim.api.nvim_set_hl(0, "PiThinking", { fg = think_fg, italic = true, bg = bg })
+  vim.api.nvim_set_hl(0, "PiAgent", { fg = 0xbb9af7, bold = true, bg = bg })
+  vim.api.nvim_set_hl(0, "PiError", { fg = 0xf7768e, bold = true, bg = bg })
+  if not hl_autocmd then
+    hl_autocmd = vim.api.nvim_create_autocmd("ColorScheme", {
+      callback = function()
+        ensure_hl()
+      end,
+    })
+  end
 end
 
 function M.chat_buf()
@@ -128,6 +206,47 @@ function M.set_input_zindex(z)
   pcall(vim.api.nvim_win_set_config, wins.input, cfg)
 end
 
+local PICKER_BEHIND_Z = 40
+local ASK_DEFAULT_Z = 60
+
+--- Focus existing ask win only (no open_input / inject_yank)
+local function refocus_input_win()
+  if not M.is_input_open() then
+    return
+  end
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    local name = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(w))
+    if name:match("pi://input") then
+      vim.api.nvim_set_current_win(w)
+      return
+    end
+  end
+end
+
+--- Run a picker while ask (if open) sits behind it.
+--- `open_fn(done)` must call `done()` when the picker closes (select or cancel).
+---@param open_fn fun(done: fun())
+function M.with_picker(open_fn)
+  local had_input = M.is_input_open()
+  if had_input then
+    M.set_input_zindex(PICKER_BEHIND_Z)
+  end
+  local finished = false
+  local function done()
+    if finished then
+      return
+    end
+    finished = true
+    if had_input then
+      M.set_input_zindex(ASK_DEFAULT_Z)
+      refocus_input_win()
+    end
+  end
+  vim.schedule(function()
+    open_fn(done)
+  end)
+end
+
 function M.is_fullscreen()
   return fullscreen
 end
@@ -179,6 +298,7 @@ local function apply_input_layout()
     title_pos = "center",
     zindex = cur.zindex or 60,
   })
+  configure_ask_win(wins.input)
 end
 
 function M.close_input()
@@ -190,6 +310,8 @@ function M.close_input()
   if bufs.input and vim.api.nvim_buf_is_valid(bufs.input) then
     pcall(vim.api.nvim_buf_set_lines, bufs.input, 0, -1, false, { "" })
   end
+  -- Ask is always insert; without stopinsert, insert sticks to chat after submit.
+  pcall(vim.cmd, "stopinsert")
   if M.is_open() then
     vim.api.nvim_set_current_win(wins.chat)
   end
@@ -257,6 +379,7 @@ function M.open_input(opts)
     inject_yank()
   end
   if M.is_input_open() then
+    configure_ask_win(wins.input)
     vim.api.nvim_set_current_win(wins.input)
     vim.cmd("startinsert!")
     return
@@ -274,9 +397,7 @@ function M.open_input(opts)
     title_pos = "center",
     zindex = 60,
   })
-  pcall(function()
-    vim.wo[wins.input].winhl = "Normal:PiChatNormal,NormalFloat:PiChatNormal,FloatBorder:PiChatBorder"
-  end)
+  configure_ask_win(wins.input)
   vim.cmd("startinsert!")
 end
 

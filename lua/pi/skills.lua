@@ -25,20 +25,25 @@ function M.pick(on_select)
     vim.notify("pi: no skills from get_commands", vim.log.levels.INFO)
     return
   end
-  vim.ui.select(skills, {
-    prompt = "pi #skills",
-    format_item = function(c)
-      local name = tostring(c.name or ""):gsub("^skill:", "")
-      local desc = c.description or ""
-      if desc ~= "" then
-        return string.format("#%s — %s", name, desc)
+  require("pi.ui").with_picker(function(done)
+    vim.ui.select(skills, {
+      prompt = "pi #skills",
+      format_item = function(c)
+        local name = tostring(c.name or ""):gsub("^skill:", "")
+        local desc = c.description or ""
+        if desc ~= "" then
+          return string.format("#%s — %s", name, desc)
+        end
+        return "#" .. name
+      end,
+    }, function(choice)
+      done()
+      if choice and on_select then
+        on_select(choice)
+      elseif require("pi.ui").is_input_open() then
+        vim.cmd("startinsert!")
       end
-      return "#" .. name
-    end,
-  }, function(choice)
-    if choice and on_select then
-      on_select(choice)
-    end
+    end)
   end)
 end
 

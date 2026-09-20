@@ -31,21 +31,26 @@ function M.pick(on_select)
     vim.notify("pi: no slash commands", vim.log.levels.INFO)
     return
   end
-  vim.ui.select(cmds, {
-    prompt = "pi /commands",
-    format_item = function(c)
-      local name = c.name or "?"
-      local desc = c.description or ""
-      local src = c.source or ""
-      if desc ~= "" then
-        return string.format("/%s — %s [%s]", name, desc, src)
+  require("pi.ui").with_picker(function(done)
+    vim.ui.select(cmds, {
+      prompt = "pi /commands",
+      format_item = function(c)
+        local name = c.name or "?"
+        local desc = c.description or ""
+        local src = c.source or ""
+        if desc ~= "" then
+          return string.format("/%s — %s [%s]", name, desc, src)
+        end
+        return "/" .. name
+      end,
+    }, function(choice)
+      done()
+      if choice and on_select then
+        on_select(choice)
+      elseif require("pi.ui").is_input_open() then
+        vim.cmd("startinsert!")
       end
-      return "/" .. name
-    end,
-  }, function(choice)
-    if choice and on_select then
-      on_select(choice)
-    end
+    end)
   end)
 end
 

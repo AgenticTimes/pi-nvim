@@ -3,3 +3,8 @@
 *.swo
 demo/_t*.lua
 .lua/
+# >>> Comet managed project state >>>
+!/.comet/
+/.comet/*
+!/.comet/config.yaml
+# <<< Comet managed project state <<<

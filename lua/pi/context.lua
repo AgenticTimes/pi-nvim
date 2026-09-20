@@ -269,34 +269,15 @@ function M.pick_file(cb)
     return
   end
 
-  -- Keep ask open; drop its zindex so telescope (zindex≈100) sits on top.
-  -- Closing/reopening ask nested floats and broke the layout.
-  local ui = require("pi.ui")
-  local had_input = ui.is_input_open and ui.is_input_open()
-  if had_input then
-    ui.set_input_zindex(40)
-  end
-
-  vim.schedule(function()
+  -- Keep ask open; drop zindex so telescope sits on top (via ui.with_picker).
+  require("pi.ui").with_picker(function(done)
     vim.ui.select(files, {
       prompt = "pi @file · " .. vim.fn.fnamemodify(root, ":~"),
     }, function(item)
-      if had_input then
-        ui.set_input_zindex(60)
-        if ui.is_input_open() then
-          -- refocus ask without recreating the float
-          for _, w in ipairs(vim.api.nvim_list_wins()) do
-            local name = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(w))
-            if name:match("pi://input") then
-              vim.api.nvim_set_current_win(w)
-              break
-            end
-          end
-        end
-      end
+      done()
       if item and cb then
         cb(item)
-      elseif had_input then
+      elseif require("pi.ui").is_input_open() then
         vim.cmd("startinsert!")
       end
     end)

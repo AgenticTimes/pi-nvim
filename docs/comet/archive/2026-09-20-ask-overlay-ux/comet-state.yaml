@@ -1,0 +1,243 @@
+schema: comet.native.v4
+name: ask-overlay-ux
+language: zh-CN
+phase: archive
+status: done
+state_version: 11
+brief: brief.md
+spec_changes:
+  - capability: ask-picker-overlay
+    operation: create
+    source: specs/ask-picker-overlay/spec.md
+workspace:
+  isolation: current
+  change_branch: main
+  target_branch: main
+  finish: null
+loop:
+  stage: done
+  goal_cycle: 1
+  iteration: 2
+  attempt: 1
+  retry_epoch: 0
+  failed_iteration_count: 0
+  no_progress_count: 0
+  execution_failure_count: 0
+  previous_unresolved_ids: []
+  next_action: null
+acceptance:
+  - id: A1
+    source: brief.md
+    text: "A1: Ask 打开且内容为空时按 `/`，slash 列表完整可见、可滚动选择，不被 ask 遮挡。"
+    result: passed
+    reason:
+      text: Empty ask / → slash.pick → with_picker; zindex 40 during select
+      truncated: false
+  - id: A2
+    source: brief.md
+    text: "A2: Ask 打开时按 `#`，skill 列表完整可见；取消或选中后 ask 仍开着且可继续输入。"
+    result: passed
+    reason:
+      text: "Ask # → skills.pick → with_picker; ask stays open"
+      truncated: false
+  - id: A3
+    source: brief.md
+    text: "A3: Ask 打开时按 `@` 选文件，行为与现有一致（列表在 ask 之上；选完插入路径并回到 ask）。"
+    result: passed
+    reason:
+      text: Ask @ → pick_file → with_picker; path insert + refocus
+      truncated: false
+  - id: A4
+    source: brief.md
+    text: "A4: 选择取消（Esc）后 ask `zindex` 恢复为默认，再次打开 picker 仍可见。"
+    result: passed
+    reason:
+      text: done() restores zindex 60 on cancel/select
+      truncated: false
+  - id: A5
+    source: specs/ask-picker-overlay/spec.md
+    text: 当 `pi://input` ask 浮窗打开时，用户触发的命令/技能/文件选择器必须叠在 ask **之上**，且 ask 窗口保持打开。
+    result: passed
+    reason:
+      text: Ask stays open; no close/reopen
+      truncated: false
+  - id: A6
+    source: specs/ask-picker-overlay/spec.md
+    text: "| 输入 | 行为 |"
+    result: passed
+    reason:
+      text: Spec table header artifact; covered by A1-A3
+      truncated: false
+  - id: A7
+    source: specs/ask-picker-overlay/spec.md
+    text: "| ask 内容为空（或仅空白）时按配置的 slash 键（默认 `/`） | 打开 slash command 选择器 |"
+    result: passed
+    reason:
+      text: "Table row: empty / opens slash; covered by A1"
+      truncated: false
+  - id: A8
+    source: specs/ask-picker-overlay/spec.md
+    text: "| ask 内按 `#`（配置键） | 打开 skill 选择器 |"
+    result: passed
+    reason:
+      text: "Table row: # opens skills; covered by A2"
+      truncated: false
+  - id: A9
+    source: specs/ask-picker-overlay/spec.md
+    text: "| ask 内按 `@` | 打开项目文件选择器 |"
+    result: passed
+    reason:
+      text: "Table row: @ opens files; covered by A3"
+      truncated: false
+  - id: A10
+    source: specs/ask-picker-overlay/spec.md
+    text: 打开任意上述选择器前：若 ask 已开，将 ask 窗口 `zindex` 降到 **40**（低于常见
+      telescope/`vim.ui.select` 浮层 ≈100）。
+    result: passed
+    reason:
+      text: PICKER_BEHIND_Z=40 when ask open
+      truncated: false
+  - id: A11
+    source: specs/ask-picker-overlay/spec.md
+    text: 选择器关闭后（选中或取消）：将 ask `zindex` 恢复为 **60**；若 ask 仍开，聚焦 `pi://input`
+      并进入插入模式（与现 `@` 路径一致）。
+    result: passed
+    reason:
+      text: Restore 60 + private refocus_input_win (not open_input)
+      truncated: false
+  - id: A12
+    source: specs/ask-picker-overlay/spec.md
+    text: 整个过程 **不得** 关闭或重建 ask 浮窗。
+    result: passed
+    reason:
+      text: No ask close/rebuild in picker path
+      truncated: false
+  - id: A13
+    source: specs/ask-picker-overlay/spec.md
+    text: "`pi.ui` 提供单一入口（如 `with_picker(fn)`）：封装降 zindex → `fn`（通常 `vim.schedule` +
+      `vim.ui.select`）→ 回调里恢复。"
+    result: passed
+    reason:
+      text: ui.with_picker single entry
+      truncated: false
+  - id: A14
+    source: specs/ask-picker-overlay/spec.md
+    text: "`pi.slash.pick`、`pi.skills.pick`、`pi.context.pick_file` 必须经该入口；禁止各自复制不一致的
+      zindex 逻辑。"
+    result: passed
+    reason:
+      text: slash/skills/pick_file all use with_picker
+      truncated: false
+  - id: A15
+    source: specs/ask-picker-overlay/spec.md
+    text: 无 ask 打开时，选择器行为与现网一致（不强制改 zindex）。
+    result: passed
+    reason:
+      text: No zindex change when ask closed
+      truncated: false
+  - id: A16
+    source: specs/ask-picker-overlay/spec.md
+    text: 用户能完整阅读选择器列表与 prompt，不被 ask 边框/正文挡住。
+    result: passed
+    reason:
+      text: Ask behind picker via lowered zindex
+      truncated: false
+  - id: A17
+    source: specs/ask-picker-overlay/spec.md
+    text: 选中后文本插入 ask（slash/skill/路径），可继续编辑并提交。
+    result: passed
+    reason:
+      text: Insert text into ask after select
+      truncated: false
+builder_handoff:
+  candidate_id: 7d89e5b5-6b25-4beb-90b7-5f1a9126d0f5
+  identity_provider: skill-coordinated
+  builder_execution_ref: skill-coordinated:builder:1ba2859e-43a7-4ea1-96a8-528d410ef5f3
+  iteration: 2
+  summary:
+    text: "Fix: with_picker uses private refocus_input_win (set current win only).
+      Removed shadowed M.focus_input that called open_input/inject_yank and
+      could wipe ask draft after picker close. Public focus_input → open_input
+      unchanged for keymaps."
+    truncated: false
+  addressed_acceptance_ids:
+    - A1
+    - A2
+    - A3
+    - A4
+    - A5
+    - A10
+    - A11
+    - A12
+    - A13
+    - A14
+    - A15
+    - A16
+    - A17
+  checks:
+    - name:
+        text: nvim -u NONE -l tests/run.lua
+        truncated: false
+      result: passed
+      note:
+        text: 20 passed, 0 failed
+        truncated: false
+  checks_truncated: false
+  known_limits:
+    - text: Manual telescope overlay still recommended; A6-A9 are Spec table parse
+        artifacts.
+      truncated: false
+  known_limits_truncated: false
+  submitted_at: 2026-09-20T13:01:58.088Z
+blockers: []
+verification:
+  candidate_id: 7d89e5b5-6b25-4beb-90b7-5f1a9126d0f5
+  identity_provider: skill-coordinated
+  verifier_execution_ref: skill-coordinated:verifier:2de8bae9-7c6d-4e95-b4f0-de450bc4c8c9
+  iteration: 2
+  attempt: 1
+  assurance: skill-coordinated
+  verdict: pass
+  checks: []
+  summary:
+    text: "with_picker drops ask zindex for / # @; private refocus avoids
+      inject_yank wipe; tests 20 passed."
+    truncated: false
+  risks: []
+  risks_truncated: false
+  completed_at: 2026-09-20T13:03:47.710Z
+history:
+  - goal_cycle: 1
+    iteration: 1
+    attempt: 1
+    outcome: recovery
+    unresolved_ids: []
+    summary:
+      text: Verifier found focus_input shadowed by open_input; with_picker may wipe
+        ask draft via inject_yank. Revising.
+      truncated: false
+    completed_at: 2026-09-20T13:01:14.785Z
+  - goal_cycle: 1
+    iteration: 2
+    attempt: 1
+    outcome: pass
+    unresolved_ids: []
+    summary:
+      text: "with_picker drops ask zindex for / # @; private refocus avoids
+        inject_yank wipe; tests 20 passed."
+      truncated: false
+    completed_at: 2026-09-20T13:03:47.710Z
+history_overflow:
+  dropped_entries: 0
+  first_dropped_at: null
+  last_dropped_at: null
+  outcome_counts:
+    pass: 0
+    fail: 0
+    blocked: 0
+    execution-error: 0
+    recovery: 0
+verification_result: pass
+verification_report: verification.md
+archived: true
+created_at: 2026-09-20T12:52:12.850Z
