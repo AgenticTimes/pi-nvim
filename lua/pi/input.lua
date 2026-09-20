@@ -184,21 +184,20 @@ function M.submit(opts)
   local message = pre ~= "" and (pre .. "\n\n" .. expanded) or expanded
   local session = require("pi.session")
   local busy = session.is_busy()
-  local label = "you"
+  -- steer/follow-up: tiny suffix in the bubble itself (no role header)
+  local display = text
   if busy then
     local mode = opts.streamingBehavior or config.opts.busy_submit or "steer"
-    label = mode == "followUp" and "you (follow-up)" or "you (steer)"
+    display = text .. (mode == "followUp" and "  ·follow-up" or "  ·steer")
   elseif opts.streamingBehavior == "steer" then
-    label = "you (steer)"
+    display = text .. "  ·steer"
   end
   local ui = require("pi.ui")
   local chat = ui.chat_buf()
   if chat then
     local render = require("pi.render")
     render.stick()
-    render.append(chat, "")
-    render.append(chat, "### " .. label)
-    render.append(chat, text)
+    render.append_user(chat, display)
     render.follow(chat, true, ui.chat_win and ui.chat_win() or nil)
   end
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "" })

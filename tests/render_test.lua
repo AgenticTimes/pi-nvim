@@ -34,7 +34,6 @@ for _, l in ipairs(lines) do
 end
 h.assert_eq(#tool_lines, 1, "collapsed to one line: " .. vim.inspect(tool_lines))
 h.assert_truthy(tool_lines[1]:find("×5", 1, true), "has ×5: " .. tool_lines[1])
-h.assert_truthy(tool_lines[1]:find("sample.lua", 1, true), "has path")
 h.assert_truthy(tool_lines[1]:find("✓", 1, true), "ok mark")
 
 -- different path breaks collapse
@@ -59,7 +58,41 @@ for _, l in ipairs(lines) do
 end
 h.assert_eq(#tool_lines, 2, "second path new line")
 
--- assistant text gets header
+-- tool call arguments are rendered inside the tool box (its own buffer)
+local tb = vim.api.nvim_create_buf(false, true)
+render.setup(tb)
+render.reset(tb)
+render.on_event(tb, { type = "tool_execution_start", toolCallId = "r1", toolName = "nvim_read_buffer", args = { path = "demo/sample.lua", offset = 10, limit = 20 } })
+render.on_event(tb, { type = "tool_execution_end", toolCallId = "r1", toolName = "nvim_read_buffer", isError = false })
+render.on_event(tb, { type = "tool_execution_start", toolCallId = "s1", toolName = "bash", args = { command = "git status --short" } })
+render.on_event(tb, { type = "tool_execution_end", toolCallId = "s1", toolName = "bash", isError = false })
+render.on_event(tb, { type = "tool_execution_start", toolCallId = "e1", toolName = "bash", args = { command = "nope" } })
+render.on_event(tb, {
+  type = "tool_execution_end",
+  toolCallId = "e1",
+  toolName = "bash",
+  isError = true,
+  result = { content = { { type = "text", text = "command not found" } } },
+})
+local tjoin = table.concat(vim.api.nvim_buf_get_lines(tb, 0, -1, false), "\n")
+h.assert_truthy(tjoin:find("  path: demo/sample.lua", 1, true), "read arg line: " .. tjoin)
+h.assert_truthy(tjoin:find("  offset: 10", 1, true), "offset arg line")
+h.assert_truthy(tjoin:find("  limit: 20", 1, true), "limit arg line")
+h.assert_truthy(tjoin:find("  $ git status --short", 1, true), "bash command shown: " .. tjoin)
+h.assert_false(tjoin:find("command:", 1, true), "bash uses $ form, not command:")
+h.assert_truthy(tjoin:find("  ! command not found", 1, true), "tool error text")
+h.assert_truthy(tjoin:find("✗", 1, true), "failure mark")
+-- the three tool calls form one contiguous box
+local tool_boxes = 0
+for _, b in ipairs(vim.api.nvim_buf_get_extmarks(tb, h.last_box_ns(tb), 0, -1, { details = true })) do
+  if (b[4] or {}).virt_lines then
+    tool_boxes = tool_boxes + 1
+  end
+end
+h.assert_eq(tool_boxes, 2, "one top + one bottom rule for the whole batch")
+
+
+-- assistant text has no role header (OpenCode-style)
 render.on_event(b, { type = "agent_start" })
 render.on_event(b, {
   type = "message_update",
@@ -71,7 +104,8 @@ render.on_event(b, {
 })
 lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
 local joined = table.concat(lines, "\n")
-h.assert_truthy(joined:find("### assistant", 1, true), "assistant header")
+h.assert_false(joined:find("### assistant", 1, true), "no assistant header")
+h.assert_false(joined:find("— agent —", 1, true), "no agent rule")
 h.assert_truthy(joined:find("Hello world", 1, true), "streamed text")
 
 -- newlines in deltas become real buffer lines
@@ -156,7 +190,7 @@ render.on_event(b, {
 })
 lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
 joined = table.concat(lines, "\n")
-h.assert_truthy(joined:find("### error", 1, true), "error header")
+h.assert_false(joined:find("### error", 1, true), "no error header")
 h.assert_truthy(joined:find("401", 1, true), "error body")
 
 render.on_event(b, { type = "agent_start" })
@@ -168,7 +202,7 @@ lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
 joined = table.concat(lines, "\n")
 h.assert_truthy(joined:find("stream boom", 1, true), "stream error text")
 
--- thinking streams before assistant text (blockquote)
+-- thinking = gray text, no headers/quotes; then assistant
 render.on_event(b, { type = "agent_start" })
 render.on_event(b, {
   type = "message_update",
@@ -188,13 +222,23 @@ render.on_event(b, {
 })
 lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
 joined = table.concat(lines, "\n")
-h.assert_truthy(joined:find("### thinking", 1, true), "thinking header")
-h.assert_truthy(joined:find("> step one", 1, true), "thinking quoted")
-h.assert_truthy(joined:find("> step two", 1, true), "thinking line2")
-h.assert_truthy(joined:find("### assistant", 1, true), "assistant after thinking")
+h.assert_false(joined:find("### thinking", 1, true), "no thinking header")
+h.assert_truthy(joined:find("step one", 1, true), "thinking line1")
+h.assert_truthy(joined:find("step two", 1, true), "thinking line2")
+h.assert_false(joined:find("### assistant", 1, true), "no assistant header")
 h.assert_truthy(joined:find("final answer", 1, true), "answer text")
+-- thinking lines have PiThinking mark
+local tns = vim.api.nvim_get_namespaces()["pi_role"]
+local tmarks = vim.api.nvim_buf_get_extmarks(b, tns, 0, -1, { details = true })
+local has_think_hl = false
+for _, m in ipairs(tmarks) do
+  if m[4] and m[4].hl_group == "PiThinking" then
+    has_think_hl = true
+  end
+end
+h.assert_truthy(has_think_hl, "thinking gray hl")
 
--- hydrate includes thinking parts
+-- hydrate includes thinking parts (no headers)
 local hb = vim.api.nvim_create_buf(false, true)
 render.setup(hb)
 local n = render.hydrate(hb, {
@@ -208,9 +252,71 @@ local n = render.hydrate(hb, {
 }, { footer = false })
 h.assert_eq(n, 1, "hydrated one")
 local hjoin = table.concat(vim.api.nvim_buf_get_lines(hb, 0, -1, false), "\n")
-h.assert_truthy(hjoin:find("### thinking", 1, true), "hydrate thinking")
-h.assert_truthy(hjoin:find("> why", 1, true), "hydrate quote")
+h.assert_false(hjoin:find("### thinking", 1, true), "no hydrate thinking header")
+h.assert_truthy(hjoin:find("why", 1, true), "hydrate thinking body")
 h.assert_truthy(hjoin:find("because", 1, true), "hydrate text")
+
+-- streamed thinking stays inside exactly one dashed box, even char-by-char
+render.on_event(b, { type = "agent_start" })
+for ch in ("alpha beta"):gmatch(".") do
+  render.on_event(b, { type = "message_update", assistantMessageEvent = { type = "thinking_delta", delta = ch } })
+end
+render.on_event(b, { type = "message_update", assistantMessageEvent = { type = "thinking_delta", delta = "\ngamma" } })
+render.on_event(b, { type = "message_update", assistantMessageEvent = { type = "thinking_end" } })
+
+-- scope to this box's own namespace: extmark rows drift when a boxed line is
+-- rewritten (virt_lines + nvim_buf_set_lines), so row ranges are not reliable
+local rows = 2 -- "alpha beta" + "gamma"
+local marks = h.box_marks(b, h.last_box_ns(b))
+h.assert_eq(#marks, 2 * rows + 2, "2 marks per row + 2 rules, no accumulation")
+
+local bodies, tops, bottoms = 0, 0, 0
+local eol_by_row, body_by_row = {}, {}
+for _, m in ipairs(marks) do
+  local d = m[4] or {}
+  if d.line_hl_group == "PiThinkBubble" then
+    bodies = bodies + 1
+    body_by_row[m[2]] = true
+  end
+  if d.virt_text_pos == "eol" then
+    local vt = d.virt_text[1]
+    h.assert_eq(vt[2], "PiThinkBorder", "right border uses the role border hl")
+    eol_by_row[m[2]] = vim.fn.strdisplaywidth(vt[1])
+  end
+  for _, _ in ipairs(d.virt_lines or {}) do
+    if d.virt_lines_above then
+      tops = tops + 1
+    else
+      bottoms = bottoms + 1
+    end
+  end
+end
+h.assert_eq(bodies, rows, "one body mark per thinking row")
+h.assert_eq(tops, 1, "exactly one top rule")
+h.assert_eq(bottoms, 1, "exactly one bottom rule")
+
+-- every boxed row pads out to the same inner width (border lands on the box edge)
+local info = vim.fn.getwininfo(win)[1]
+local inner = math.max(10, info.width - (info.textoff or 0) - 2)
+local widths = {}
+for row in pairs(body_by_row) do
+  h.assert_truthy(eol_by_row[row], "row has a right border")
+  widths[row] = eol_by_row[row]
+end
+h.assert_eq(vim.tbl_count(widths), rows, "one right border per row")
+-- pad = inner - 1 - content_w, so pad + 1 + content_w == inner for every row
+local pads = vim.tbl_values(widths)
+table.sort(pads)
+h.assert_eq(pads[1] + 10, pads[#pads] + 5, "both rows pad out to one inner width")
+h.assert_eq(pads[#pads] + 5, inner, "right border lands on the box edge")
+
+-- hammering one line with deltas must not stack marks
+render.on_event(b, { type = "message_update", assistantMessageEvent = { type = "thinking_delta", delta = "z" } })
+for _ = 1, 40 do
+  render.on_event(b, { type = "message_update", assistantMessageEvent = { type = "thinking_delta", delta = "x" } })
+end
+render.on_event(b, { type = "message_update", assistantMessageEvent = { type = "thinking_end" } })
+h.assert_eq(#h.box_marks(b, h.last_box_ns(b)), 2 + 2, "no mark accumulation after 41 deltas into one row")
 
 pcall(vim.api.nvim_win_close, win, true)
 pcall(vim.api.nvim_win_close, other, true)
