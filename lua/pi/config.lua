@@ -31,6 +31,8 @@ M.opts = {
   write_on_accept = true,
   rpc_timeout = 30,
   busy_submit = "steer", -- "steer" | "followUp" when agent is streaming
+  --- stream thinking_delta into chat as ### thinking (before assistant text)
+  show_thinking = true,
   --- "auto" = host tools enabled; "chat" = --no-tools (no tool calls)
   mode = "auto",
   --- confirm dialogs: ask | smart | auto | deny

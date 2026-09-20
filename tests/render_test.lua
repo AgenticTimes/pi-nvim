@@ -168,5 +168,49 @@ lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
 joined = table.concat(lines, "\n")
 h.assert_truthy(joined:find("stream boom", 1, true), "stream error text")
 
+-- thinking streams before assistant text (blockquote)
+render.on_event(b, { type = "agent_start" })
+render.on_event(b, {
+  type = "message_update",
+  assistantMessageEvent = { type = "thinking_delta", delta = "step one" },
+})
+render.on_event(b, {
+  type = "message_update",
+  assistantMessageEvent = { type = "thinking_delta", delta = "\nstep two" },
+})
+render.on_event(b, {
+  type = "message_update",
+  assistantMessageEvent = { type = "thinking_end" },
+})
+render.on_event(b, {
+  type = "message_update",
+  assistantMessageEvent = { type = "text_delta", delta = "final answer" },
+})
+lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
+joined = table.concat(lines, "\n")
+h.assert_truthy(joined:find("### thinking", 1, true), "thinking header")
+h.assert_truthy(joined:find("> step one", 1, true), "thinking quoted")
+h.assert_truthy(joined:find("> step two", 1, true), "thinking line2")
+h.assert_truthy(joined:find("### assistant", 1, true), "assistant after thinking")
+h.assert_truthy(joined:find("final answer", 1, true), "answer text")
+
+-- hydrate includes thinking parts
+local hb = vim.api.nvim_create_buf(false, true)
+render.setup(hb)
+local n = render.hydrate(hb, {
+  {
+    role = "assistant",
+    content = {
+      { type = "thinking", thinking = "why\nnot" },
+      { type = "text", text = "because" },
+    },
+  },
+}, { footer = false })
+h.assert_eq(n, 1, "hydrated one")
+local hjoin = table.concat(vim.api.nvim_buf_get_lines(hb, 0, -1, false), "\n")
+h.assert_truthy(hjoin:find("### thinking", 1, true), "hydrate thinking")
+h.assert_truthy(hjoin:find("> why", 1, true), "hydrate quote")
+h.assert_truthy(hjoin:find("because", 1, true), "hydrate text")
+
 pcall(vim.api.nvim_win_close, win, true)
 pcall(vim.api.nvim_win_close, other, true)

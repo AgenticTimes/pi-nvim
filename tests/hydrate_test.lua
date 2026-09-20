@@ -14,7 +14,9 @@ local t = render.message_text({
 })
 h.assert_truthy(t:find("hello", 1, true), "keeps text")
 h.assert_truthy(t:find("2 tool call", 1, true), "counts tools")
-h.assert_false(t:find("secret", 1, true), "skips thinking")
+h.assert_truthy(t:find("secret", 1, true), "includes thinking")
+h.assert_truthy(t:find("### thinking", 1, true), "thinking header")
+h.assert_truthy(t:find("> secret", 1, true), "thinking quoted")
 
 -- normalize_messages skips toolResult
 local msgs = render.normalize_messages({

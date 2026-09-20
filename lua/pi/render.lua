@@ -6,6 +6,7 @@ local pending = {}
 -- last compact tool summary for collapse: { name, detail, count, line_idx }
 local last_tool = nil
 local streaming_assistant = false
+local streaming_thinking = false
 local follow_scheduled = false
 --- Cleared only by gg; content updates always force-follow while true
 local stick_bottom = true
@@ -46,6 +47,7 @@ function M.reset(buf)
   pending = {}
   last_tool = nil
   streaming_assistant = false
+  streaming_thinking = false
   follow_scheduled = false
   stick_bottom = true
   suppress_until = 0
@@ -346,6 +348,9 @@ function M.jump_message(buf, win, dir)
 end
 
 local function ensure_assistant_header(buf)
+  if streaming_thinking then
+    streaming_thinking = false
+  end
   if streaming_assistant then
     return
   end
@@ -354,6 +359,20 @@ local function ensure_assistant_header(buf)
   with_write(buf, function()
     -- no trailing blank: empty line + leading \n in deltas caused a sparse "empty bottom"
     vim.api.nvim_buf_set_lines(buf, -1, -1, false, { "", "### assistant" })
+  end)
+  schedule_follow(buf)
+end
+
+local function ensure_thinking_header(buf)
+  if streaming_thinking then
+    return
+  end
+  streaming_thinking = true
+  -- text after thinking needs a fresh ### assistant
+  streaming_assistant = false
+  last_tool = nil
+  with_write(buf, function()
+    vim.api.nvim_buf_set_lines(buf, -1, -1, false, { "", "### thinking" })
   end)
   schedule_follow(buf)
 end
@@ -376,13 +395,21 @@ local function append_text_delta(buf, delta)
       if text == "" and last == "" then
         return
       end
+      -- thinking block: markdown blockquote so it reads as secondary
+      if streaming_thinking and text ~= "" and not text:match("^>") then
+        text = "> " .. text
+      elseif streaming_thinking and text == "" then
+        text = ">"
+      end
       vim.api.nvim_buf_set_lines(buf, -1, -1, false, { text })
     end
 
     if is_structural_line(last) then
       push_line(parts[1])
     else
-      vim.api.nvim_buf_set_lines(buf, n - 1, n, false, { last .. parts[1] })
+      local chunk = parts[1]
+      -- continuing a thinking line already prefixed with "> "
+      vim.api.nvim_buf_set_lines(buf, n - 1, n, false, { last .. chunk })
     end
 
     for i = 2, #parts do
@@ -417,6 +444,7 @@ function M.on_event(buf, ev)
 
   if ev.type == "agent_start" then
     streaming_assistant = false
+    streaming_thinking = false
     pending = {}
     stick_bottom = true
     M.append(buf, "— agent —")
@@ -425,6 +453,7 @@ function M.on_event(buf, ev)
 
   if ev.type == "agent_end" then
     streaming_assistant = false
+    streaming_thinking = false
     last_tool = nil
     -- Surface API / model failures (e.g. 401) that produced no text_delta
     local msgs = ev.messages
@@ -453,11 +482,20 @@ function M.on_event(buf, ev)
 
   if ev.type == "message_update" and ev.assistantMessageEvent then
     local a = ev.assistantMessageEvent
+    local show_think = require("pi.config").opts.show_thinking ~= false
     if a.type == "text_delta" and a.delta then
       ensure_assistant_header(buf)
       append_text_delta(buf, a.delta)
-    elseif a.type == "thinking_delta" and a.delta then
-      -- optional: show thinking lightly; skip for now to avoid noise
+    elseif show_think and (a.type == "thinking_delta" or a.type == "thinking_start") then
+      if a.type == "thinking_start" or (a.delta and a.delta ~= "") then
+        ensure_thinking_header(buf)
+      end
+      if a.delta and a.delta ~= "" then
+        append_text_delta(buf, a.delta)
+      end
+    elseif a.type == "thinking_end" then
+      streaming_thinking = false
+      schedule_follow(buf)
     elseif a.type == "error" then
       local err = a.errorMessage or a.message or a.error or "assistant error"
       M.append(buf, "### error")
@@ -465,11 +503,13 @@ function M.on_event(buf, ev)
         M.append(buf, line)
       end
       streaming_assistant = false
+      streaming_thinking = false
       vim.schedule(function()
         vim.notify("pi: " .. tostring(err):sub(1, 200), vim.log.levels.ERROR)
       end)
     elseif a.type == "text_end" or a.type == "done" then
       streaming_assistant = false
+      streaming_thinking = false
       schedule_follow(buf)
     end
   end
@@ -496,19 +536,40 @@ function M.message_text(content)
     return ""
   end
   local texts = {}
+  local thinking = {}
   local tools = 0
+  local show_think = require("pi.config").opts.show_thinking ~= false
   for _, part in ipairs(content) do
     if type(part) == "string" then
       table.insert(texts, part)
     elseif type(part) == "table" then
       if part.type == "text" and part.text and part.text ~= "" then
         table.insert(texts, part.text)
+      elseif show_think and part.type == "thinking" and part.thinking and part.thinking ~= "" then
+        table.insert(thinking, part.thinking)
       elseif part.type == "toolCall" then
         tools = tools + 1
       end
     end
   end
-  local out = table.concat(texts, "\n")
+  local chunks = {}
+  if #thinking > 0 then
+    local body = table.concat(thinking, "\n")
+    local quoted = {}
+    for line in (body .. "\n"):gmatch("(.-)\n") do
+      table.insert(quoted, line == "" and ">" or ("> " .. line))
+    end
+    table.insert(chunks, "### thinking\n" .. table.concat(quoted, "\n"))
+  end
+  if #texts > 0 then
+    local body = table.concat(texts, "\n")
+    if #thinking > 0 then
+      table.insert(chunks, "### assistant\n" .. body)
+    else
+      table.insert(chunks, body)
+    end
+  end
+  local out = table.concat(chunks, "\n\n")
   if tools > 0 then
     local line = string.format("⚙ %d tool call(s)", tools)
     out = out ~= "" and (out .. "\n" .. line) or line
@@ -559,7 +620,7 @@ function M.hydrate(buf, messages, opts)
     if text and text:match("%S") then
       if msg.role == "user" then
         M.append(buf, "### you")
-      else
+      elseif not text:match("^### thinking") and not text:match("^### assistant") then
         M.append(buf, "### assistant")
       end
       for line in (text .. "\n"):gmatch("(.-)\n") do

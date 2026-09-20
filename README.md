@@ -53,6 +53,8 @@ In chat: `<CR>` open ask popup · `]]`/`[[` next/prev message · `q` close · `<
 
 In ask popup: `<CR>` submit · `<C-j>` newline · `<Esc>` close popup · `<C-c>` abort · `<Up>`/`<Down>` history · empty `/` slash · `@` mention · empty `#` skills.
 
+Streaming shows `### thinking` (blockquote) then `### assistant` when the model emits thinking deltas (`show_thinking = true` by default).
+
 Suggested keys: `<leader>ai` toggle (auto-resume) · `<leader>aI` new session · `<leader>as` sessions · `<leader>av` inspect · `<leader>ap` approve mode · `<leader>ah` export HTML · `<leader>ae` focus · `<leader>ac` chat/auto · `<leader>an` name · `<leader>am` pick model · `<leader>at` pick thinking · `<leader>aM`/`aT` cycle · `<leader>aF` fullscreen · `<leader>aA`/`aR` accept/reject all.
 
 Placeholders in prompts: `@this` `@buffer` `@visible` `@diagnostics` · empty `/` slash · empty `#` skills.
