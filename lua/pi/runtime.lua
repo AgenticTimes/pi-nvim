@@ -8,6 +8,7 @@ local HOST_TOOLS = "nvim_replace_in_buffer,nvim_read_buffer,nvim_open,nvim_goto"
 local resume_scheduled = false
 local hydrate_opts ---@type table|nil
 local pending_hydrate_path ---@type string|nil
+local skip_switch_hydrate = false
 local HYDRATE_ID = "hydrate-msgs"
 
 local function apply_hydrate(data, opts)
@@ -32,10 +33,22 @@ local function hydrate_from_path(path, opts)
   if not path or path == "" then
     return false
   end
-  local msgs = require("pi.sessions").load_messages(path)
+  local sessions = require("pi.sessions")
+  local hist = sessions.open_history(path)
+  local msgs, exhausted = sessions.history_page(hist)
   if #msgs == 0 then
     return false
   end
+  local footer
+  if exhausted then
+    footer = (opts and opts.footer) or "· resumed session"
+  else
+    footer = "· 往上滚查看更早"
+  end
+  opts = vim.tbl_extend("force", opts or {}, {
+    history = exhausted and nil or hist,
+    footer = footer,
+  })
   apply_hydrate({ messages = msgs }, opts)
   return true
 end
@@ -118,7 +131,9 @@ local function on_event(ev)
 
   if ev.type == "response" and ev.command == "switch_session" then
     local path = pending_hydrate_path
+    local skip = skip_switch_hydrate
     pending_hydrate_path = nil
+    skip_switch_hydrate = false
     if not ev.success or (ev.data and ev.data.cancelled) then
       vim.schedule(function()
         vim.notify("pi: switch_session failed: " .. tostring(ev.error or "cancelled"), vim.log.levels.WARN)
@@ -127,12 +142,21 @@ local function on_event(ev)
     end
     vim.schedule(function()
       require("pi.slash").invalidate()
+      -- Disk paint already happened; get_messages would decode the whole
+      -- session on the main thread and lock input.
+      if skip then
+        M.refresh_state()
+        pcall(function()
+          require("pi.ui").focus_chat()
+        end)
+        return
+      end
       local opts = { footer = "· resumed session" }
-      if path and hydrate_from_path(path, opts) then
+      if path then
+        hydrate_from_path(path, opts)
         M.refresh_state()
         return
       end
-      -- fallback RPC
       M.hydrate_chat(opts)
       M.refresh_state()
     end)
@@ -215,13 +239,14 @@ local function schedule_resume(cwd)
     if not latest then
       return
     end
-    -- UI immediately from disk
+    -- UI immediately from the tail of the file. switch_session must not
+    -- paint again, and must not fall through to get_messages.
     hydrate_from_path(latest.path, { footer = "· resumed session" })
     local cur = require("pi.session").get().session_file
     if cur and cur == latest.path then
       return
     end
-    M.switch_session(latest.path)
+    M.switch_session(latest.path, { skip_hydrate = true })
   end, 200)
 end
 
@@ -317,6 +342,7 @@ end
 function M.switch_session(session_path, opts)
   opts = opts or {}
   M.ensure_started({ no_resume = true })
+  skip_switch_hydrate = opts.skip_hydrate == true
   if not opts.skip_hydrate then
     pending_hydrate_path = session_path
   else

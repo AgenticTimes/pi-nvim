@@ -168,6 +168,17 @@ session.on_event({
 })
 h.assert_eq(session.get().thinking, "low", "set_thinking stored")
 
+-- :PiRun path: open UI then prompt
+local opened = false
+package.loaded["pi.ui"].open = function()
+  opened = true
+end
+sent = {}
+runtime.run("hello from run", { open = true })
+h.assert_truthy(opened, "run opens ui")
+h.assert_eq(sent[1].type, "prompt", "run sends prompt")
+h.assert_eq(sent[1].message, "hello from run", "run message")
+
 -- unstub for subsequent tests
 package.loaded["pi.client"] = nil
 package.loaded["pi.events"] = nil

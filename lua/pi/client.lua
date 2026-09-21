@@ -12,6 +12,10 @@ local function handle_line(line)
   if line == "" then
     return
   end
+  -- A full session dump on one line locks the UI inside json.decode.
+  if #line > 262144 then
+    return
+  end
   local ok, obj = pcall(vim.json.decode, line)
   if not ok or type(obj) ~= "table" then
     return

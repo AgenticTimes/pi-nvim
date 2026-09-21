@@ -1,8 +1,10 @@
 local config = require("pi.config")
 
 local M = {}
-local wins = { chat = nil, input = nil }
-local bufs = { chat = nil, input = nil }
+local wins = { chat = nil, input = nil, todos = nil }
+local bufs = { chat = nil, input = nil, todos = nil }
+local TODO_W = 32
+local todos_open = false
 local fullscreen = true -- default: edge-to-edge chat
 local editor_win ---@type integer|nil
 
@@ -18,15 +20,40 @@ local function remember_editor()
   editor_win = cur
 end
 
---- Chat always fills the editor (ignore side-panel mode)
+function M.sidebar_width()
+  if not todos_open then
+    return 0
+  end
+  if vim.o.columns < TODO_W + 40 then
+    return 0
+  end
+  return TODO_W
+end
+
+function M.todos_visible()
+  return todos_open and M.sidebar_width() > 0
+end
+
+--- Chat fills the editor to the right of the todo sidebar
 local function chat_geometry()
   local cmd = math.max(1, vim.o.cmdheight or 1)
+  local side = M.sidebar_width()
   return {
-    width = vim.o.columns,
+    width = math.max(20, vim.o.columns - side),
+    height = math.max(8, vim.o.lines - cmd),
+    row = 0,
+    col = side,
+    border = "none",
+  }
+end
+
+local function todos_geometry()
+  local cmd = math.max(1, vim.o.cmdheight or 1)
+  return {
+    width = M.sidebar_width(),
     height = math.max(8, vim.o.lines - cmd),
     row = 0,
     col = 0,
-    border = "none",
   }
 end
 
@@ -59,6 +86,95 @@ local function configure_chat_win(win)
   pcall(function()
     vim.wo[win].smoothscroll = true
   end)
+end
+
+local function configure_todos_win(win)
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+  vim.wo[win].wrap = true
+  vim.wo[win].linebreak = true
+  vim.wo[win].signcolumn = "no"
+  vim.wo[win].cursorline = false
+  vim.wo[win].number = false
+  vim.wo[win].foldcolumn = "0"
+  pcall(function()
+    vim.wo[win].winhl = "Normal:PiTodoNormal,NormalFloat:PiTodoNormal,EndOfBuffer:PiTodoNormal"
+  end)
+end
+
+function M.todos_buf()
+  if bufs.todos and vim.api.nvim_buf_is_valid(bufs.todos) then
+    return bufs.todos
+  end
+  local b = vim.api.nvim_create_buf(false, true)
+  pcall(vim.api.nvim_buf_set_name, b, "pi://todos")
+  vim.bo[b].buftype = "nofile"
+  vim.bo[b].bufhidden = "hide"
+  vim.bo[b].swapfile = false
+  vim.bo[b].modifiable = false
+  vim.bo[b].filetype = ""
+  vim.keymap.set("n", "<CR>", function()
+    M.focus_chat()
+    M.open_input()
+  end, { buffer = b, nowait = true, silent = true, desc = "pi: ask" })
+  vim.keymap.set("n", "q", function()
+    M.close()
+  end, { buffer = b, nowait = true, silent = true, desc = "pi: close" })
+  bufs.todos = b
+  return b
+end
+
+function M.refresh_todos()
+  local b = M.todos_buf()
+  local todos = require("pi.todos")
+  local lines = todos.lines(todos.list())
+  vim.bo[b].modifiable = true
+  vim.api.nvim_buf_set_lines(b, 0, -1, false, lines)
+  vim.bo[b].modifiable = false
+  if wins.todos and vim.api.nvim_win_is_valid(wins.todos) then
+    configure_todos_win(wins.todos)
+  end
+end
+
+local function apply_todos_layout()
+  local g = todos_geometry()
+  if g.width < 8 then
+    if wins.todos and vim.api.nvim_win_is_valid(wins.todos) then
+      pcall(vim.api.nvim_win_close, wins.todos, true)
+    end
+    wins.todos = nil
+    return
+  end
+  if wins.todos and vim.api.nvim_win_is_valid(wins.todos) then
+    pcall(vim.api.nvim_win_set_config, wins.todos, {
+      relative = "editor",
+      width = g.width,
+      height = g.height,
+      row = g.row,
+      col = g.col,
+      style = "minimal",
+      border = "none",
+      zindex = 55,
+    })
+    configure_todos_win(wins.todos)
+    return
+  end
+  if not M.is_open() then
+    return
+  end
+  wins.todos = vim.api.nvim_open_win(M.todos_buf(), false, {
+    relative = "editor",
+    width = g.width,
+    height = g.height,
+    row = g.row,
+    col = g.col,
+    style = "minimal",
+    border = "none",
+    focusable = true,
+    zindex = 55,
+  })
+  configure_todos_win(wins.todos)
 end
 
 local function configure_ask_win(win)
@@ -116,6 +232,7 @@ local function ensure_hl()
   end
   vim.api.nvim_set_hl(0, "PiChatNormal", { bg = bg, fg = fg })
   vim.api.nvim_set_hl(0, "PiChatBorder", { bg = bg, fg = muted_fg(fg) })
+  vim.api.nvim_set_hl(0, "PiTodoNormal", { bg = adj_bg(bg, -14) or bg, fg = muted_fg(fg) })
   vim.api.nvim_set_hl(0, "PiAskNormal", { bg = ask_bg, fg = fg })
   vim.api.nvim_set_hl(0, "PiAskBorder", { bg = ask_bg, fg = 0x7aa2f7, bold = true })
   local bubble_bg = adj_bg(bg, 18) or bg
@@ -276,8 +393,34 @@ local function apply_chat_layout()
     border = g.border,
     title = title,
     title_pos = "center",
+    zindex = 50,
   })
   configure_chat_win(wins.chat)
+  apply_todos_layout()
+end
+
+function M.toggle_todos()
+  if not M.is_open() then
+    M.open()
+  end
+  local next_open = not todos_open
+  if next_open and vim.o.columns < TODO_W + 40 then
+    vim.notify("pi: window is too narrow for the todo sidebar", vim.log.levels.WARN)
+    return
+  end
+  todos_open = next_open
+  if not todos_open and wins.todos and vim.api.nvim_win_is_valid(wins.todos) then
+    pcall(vim.api.nvim_win_close, wins.todos, true)
+    wins.todos = nil
+  end
+  if todos_open then
+    local ok, err = pcall(M.refresh_todos)
+    if not ok then
+      vim.notify("pi: todos: " .. tostring(err), vim.log.levels.WARN)
+    end
+  end
+  apply_chat_layout()
+  M.focus_chat()
 end
 
 local function apply_input_layout()
@@ -430,20 +573,28 @@ function M.open()
     border = g.border,
     title = title,
     title_pos = "center",
+    zindex = 50,
   })
   configure_chat_win(wins.chat)
   require("pi.render").attach_scroll(wins.chat, M.chat_buf())
   require("pi.render").stick()
   require("pi.render").follow(M.chat_buf(), true)
+  if todos_open then
+    M.refresh_todos()
+    apply_todos_layout()
+  end
   -- no auto-insert: user presses Enter to open ask popup
 end
 
 function M.close()
   M.close_input()
+  if wins.todos and vim.api.nvim_win_is_valid(wins.todos) then
+    pcall(vim.api.nvim_win_close, wins.todos, true)
+  end
   if wins.chat and vim.api.nvim_win_is_valid(wins.chat) then
     pcall(vim.api.nvim_win_close, wins.chat, true)
   end
-  wins = { chat = nil, input = nil }
+  wins = { chat = nil, input = nil, todos = nil }
 end
 
 function M.toggle()
@@ -482,7 +633,7 @@ function M.focus_editor()
     return true
   end
   for _, w in ipairs(vim.api.nvim_list_wins()) do
-    if w ~= wins.chat and w ~= wins.input then
+    if w ~= wins.chat and w ~= wins.input and w ~= wins.todos then
       local cfg = vim.api.nvim_win_get_config(w)
       if not cfg.relative or cfg.relative == "" then
         vim.api.nvim_set_current_win(w)
@@ -535,6 +686,12 @@ function M.on_event(ev)
   require("pi.render").on_event(buf, ev)
   if wins.chat and vim.api.nvim_win_is_valid(wins.chat) then
     require("pi.render").follow(buf, true, wins.chat)
+  end
+  if ev and ev.type == "tool_execution_end" then
+    local name = ev.toolName
+    if name == "todo" and todos_open then
+      M.refresh_todos()
+    end
   end
 end
 

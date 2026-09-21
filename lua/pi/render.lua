@@ -13,6 +13,9 @@ local stick_bottom = true
 --- Ignore WinScrolled until this hrtime
 local suppress_until = 0
 local scroll_autocmd ---@type integer|nil
+--- buf → history state from sessions.open_history (nil once fully loaded)
+local history_by_buf = {}
+local OLDER_MARK = "↑ 更早的对话 · 滚到顶或 gg 加载"
 --- Text-level decoration (thinking gray text, error red, legacy you bar)
 local role_ns = vim.api.nvim_create_namespace("pi_role")
 local in_you_body = false
@@ -391,6 +394,9 @@ function M.reset(buf)
   in_thinking_body = false
   tool_box = nil
   think_box = nil
+  if buf then
+    history_by_buf[buf] = nil
+  end
   if buf and vim.api.nvim_buf_is_valid(buf) then
     for _, b in ipairs(bubbles[buf] or {}) do
       pcall(vim.api.nvim_buf_clear_namespace, buf, b.ns, 0, -1)
@@ -480,8 +486,12 @@ function M.follow(buf, force, win)
 end
 
 local follow_timer ---@type uv.uv_timer_t|nil
+local suspend_follow = false
 
 local function schedule_follow(buf)
+  if suspend_follow then
+    return
+  end
   -- coalesce rapid stream deltas into one scroll ~per frame
   if follow_timer and not follow_timer:is_closing() then
     follow_timer:stop()
@@ -517,6 +527,7 @@ function M.attach_scroll(win, buf)
   pcall(function()
     vim.wo[win].scrolloff = 0
   end)
+  local last_topline = 0
 
   scroll_autocmd = vim.api.nvim_create_autocmd("WinScrolled", {
     callback = function(ev)
@@ -548,6 +559,17 @@ function M.attach_scroll(win, buf)
       else
         stick_bottom = true
       end
+      local top = view.topline or 1
+      local scrolled_up = last_topline > top
+      last_topline = top
+      local taller = last > height
+      if scrolled_up and top <= 3 and taller and history_by_buf[buf] and not history_loading then
+        vim.schedule(function()
+          if vim.api.nvim_win_is_valid(win) then
+            M.load_older(buf, win)
+          end
+        end)
+      end
     end,
   })
 
@@ -560,6 +582,33 @@ function M.attach_scroll(win, buf)
     stick_bottom = false
     suppress_until = vim.uv.hrtime() + 100e6
     vim.cmd("normal! gg")
+    if history_by_buf[buf] then
+      M.load_older(buf, win)
+    end
+  end, opts)
+  local function older_if_short()
+    if not history_by_buf[buf] then
+      return false
+    end
+    local height = math.max(1, vim.api.nvim_win_get_height(win))
+    local last = vim.api.nvim_buf_line_count(buf)
+    local top = vim.fn.line("w0", win)
+    if last <= height + 1 or top <= 3 then
+      M.load_older(buf, win)
+      return true
+    end
+    return false
+  end
+  vim.keymap.set("n", "<C-u>", function()
+    if older_if_short() then
+      return
+    end
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-u>", true, false, true), "n", false)
+  end, opts)
+  vim.keymap.set("n", "<ScrollWheelUp>", function()
+    if not older_if_short() then
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<ScrollWheelUp>", true, false, true), "n", false)
+    end
   end, opts)
   -- keep chat view read-only: leave insert immediately
   vim.keymap.set("n", "i", "<Nop>", opts)
@@ -1191,12 +1240,7 @@ function M.normalize_messages(data)
 end
 
 --- Rebuild chat buffer from historical messages (skip toolResult spam)
-function M.hydrate(buf, messages, opts)
-  opts = opts or {}
-  if not buf or not vim.api.nvim_buf_is_valid(buf) then
-    return 0
-  end
-  M.reset(buf)
+local function paint_messages(buf, messages)
   local count = 0
   for _, msg in ipairs(messages or {}) do
     local parts = M.message_parts(msg.content)
@@ -1230,6 +1274,164 @@ function M.hydrate(buf, messages, opts)
       count = count + 1
     end
   end
+  return count
+end
+
+local function shift_bubbles(buf, at, delta)
+  if not delta or delta == 0 then
+    return
+  end
+  for _, b in ipairs(bubbles[buf] or {}) do
+    if b.start0 >= at then
+      b.start0 = b.start0 + delta
+      b.end0 = b.end0 + delta
+    end
+  end
+  if tool_box and tool_box.buf == buf and tool_box.box.start0 >= at then
+    tool_box.box.start0 = tool_box.box.start0 + delta
+    tool_box.box.end0 = tool_box.box.end0 + delta
+  end
+  if think_box and think_box.buf == buf and think_box.box.start0 >= at then
+    think_box.box.start0 = think_box.box.start0 + delta
+    think_box.box.end0 = think_box.box.end0 + delta
+  end
+end
+
+--- Insert the previous page above the current transcript. Keeps the viewport
+--- on the same lines unless the user is already at the top.
+function M.load_older(buf, win)
+  local st = history_by_buf[buf]
+  if history_loading or not st or (st.cursor or 0) <= 0 then
+    return false
+  end
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return false
+  end
+  history_loading = true
+  local msgs, exhausted
+  for _ = 1, 8 do
+    msgs, exhausted = require("pi.sessions").history_page(st)
+    if #msgs > 0 or exhausted or (st.cursor or 0) <= 0 then
+      break
+    end
+  end
+  if exhausted or (st.cursor or 0) <= 0 then
+    history_by_buf[buf] = nil
+  end
+  if #msgs == 0 then
+    history_loading = false
+    return false
+  end
+  local saved = {
+    pending = pending,
+    last_tool = last_tool,
+    streaming_assistant = streaming_assistant,
+    streaming_thinking = streaming_thinking,
+    follow_scheduled = follow_scheduled,
+    stick_bottom = stick_bottom,
+    suppress_until = suppress_until,
+    in_you_body = in_you_body,
+    in_thinking_body = in_thinking_body,
+    tool_box = tool_box,
+    think_box = think_box,
+  }
+  local tmp = vim.api.nvim_create_buf(false, true)
+  suspend_follow = true
+  local painted_ok, painted_err = pcall(function()
+    M.setup(tmp)
+    M.reset(tmp)
+    paint_messages(tmp, msgs)
+  end)
+  pending = saved.pending
+  last_tool = saved.last_tool
+  streaming_assistant = saved.streaming_assistant
+  streaming_thinking = saved.streaming_thinking
+  follow_scheduled = saved.follow_scheduled
+  stick_bottom = saved.stick_bottom
+  suppress_until = saved.suppress_until
+  in_you_body = saved.in_you_body
+  in_thinking_body = saved.in_thinking_body
+  tool_box = saved.tool_box
+  think_box = saved.think_box
+  suspend_follow = false
+  if not painted_ok then
+    history_loading = false
+    pcall(vim.api.nvim_buf_delete, tmp, { force = true })
+    error(painted_err)
+  end
+  local new_lines = vim.api.nvim_buf_get_lines(tmp, 2, -1, false)
+  local added = #new_lines
+  if added == 0 then
+    history_loading = false
+    bubbles[tmp] = nil
+    pcall(vim.api.nvim_buf_delete, tmp, { force = true })
+    return false
+  end
+  local insert_at = 2
+  local mark = vim.api.nvim_buf_get_lines(buf, 2, 3, false)[1]
+  if mark == OLDER_MARK then
+    insert_at = 3
+  end
+  local view
+  if win and vim.api.nvim_win_is_valid(win) then
+    local ok, saved = pcall(vim.api.nvim_win_call, win, function()
+      return vim.fn.winsaveview()
+    end)
+    if ok then
+      view = saved
+    end
+  end
+  with_write(buf, function()
+    vim.api.nvim_buf_set_lines(buf, insert_at, insert_at, false, new_lines)
+  end)
+  local coord_delta = insert_at - 2
+  shift_bubbles(buf, insert_at, added)
+  for _, b in ipairs(bubbles[tmp] or {}) do
+    b.buf = buf
+    b.ns = new_ns()
+    b.start0 = b.start0 + coord_delta
+    b.end0 = b.end0 + coord_delta
+    push_bubble(buf, b)
+    paint_box(b)
+  end
+  bubbles[tmp] = nil
+  pcall(vim.api.nvim_buf_delete, tmp, { force = true })
+  if not history_by_buf[buf] and vim.api.nvim_buf_get_lines(buf, 2, 3, false)[1] == OLDER_MARK then
+    with_write(buf, function()
+      vim.api.nvim_buf_set_lines(buf, 2, 3, false, {})
+    end)
+    shift_bubbles(buf, 3, -1)
+    added = added - 1
+  end
+  if view and win and vim.api.nvim_win_is_valid(win) then
+    if (view.topline or 1) > 3 then
+      view.topline = view.topline + added
+      view.lnum = (view.lnum or 1) + added
+    else
+      view.topline = 4
+      view.lnum = 4
+    end
+    suppress_until = vim.uv.hrtime() + 200e6
+    pcall(vim.api.nvim_win_call, win, function()
+      vim.fn.winrestview(view)
+    end)
+  end
+  history_loading = false
+  M.unstick()
+  return true
+end
+
+function M.hydrate(buf, messages, opts)
+  opts = opts or {}
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return 0
+  end
+  M.reset(buf)
+  history_by_buf[buf] = opts.history
+  if opts.history then
+    M.append(buf, OLDER_MARK)
+  end
+  local count = paint_messages(buf, messages)
   if opts.footer ~= false then
     M.append(buf, opts.footer or "· resumed session")
   end

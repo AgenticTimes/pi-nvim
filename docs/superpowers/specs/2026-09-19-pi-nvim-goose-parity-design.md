@@ -1,7 +1,7 @@
 # pi.nvim — 交互与功能清单（对照 goose.nvim）
 
-- 日期：2026-09-19
-- 状态：待用户审查
+- 日期：2026-09-19（状态更新 2026-09-21）
+- 状态：Wave 1–3 已落地；`nvim -u NONE -l tests/run.lua` 20 passed
 - 仓库：`~/source/pi.nvim`
 - 大脑：`pi --mode rpc`（不自研 agent loop）
 - 编辑：Host Tools 经 Neovim API（先改再审）
@@ -179,13 +179,28 @@ Spike 已验证：真实 `tool_execution_start` → `nvim_buf_set_lines` → dif
 5. `api`：toggle / stop / new_session / run  
 6. 测试：沿用 spike 的单文件 + 多文件 + accept 场景  
 
-### Wave 2
+### Wave 2 — 已落地
 
-- steer/follow-up、历史、fullscreen、session picker、model/thinking cycle、slash 补全  
+| 项 | 代码 | 测试 |
+|----|------|------|
+| session picker | `sessions.pick` / `:PiSessions` | `sessions_test.lua` |
+| slash `/` | `slash.pick` / `:PiSlash` | `slash_test.lua` |
+| Tab 切 pane | `ui.cycle_focus` | `ui_test.lua` |
+| `]]` / `[[` | `render.jump_message` | `ui_test.lua` |
+| Accept / Reject all | `review.accept_all` / `reject_all` | `review_all_test.lua` |
+| `:PiRun` | `plugin/pi.lua` → `runtime.run` | `wave2_test.lua` |
+| `nvim_open` / `nvim_goto` | `host_tools.apply` | `host_open_test.lua` |
+| steer、历史、fullscreen、model/thinking | `runtime` / `input` / `ui` | `wave2_test.lua` / `input_test.lua` |
 
-### Wave 3
+### Wave 3 — 已落地
 
-- approve 流、skills `#`、更细 hunk-level accept、HTML export 等  
+| 项 | 代码 | 测试 |
+|----|------|------|
+| approve `ask`/`smart`/`auto`/`deny` | `approve.lua` | `approve_modes_test.lua` |
+| `#` skills | `skills.pick` | `skills_test.lua` |
+| hunk `ah`/`rh`/`]h`/`[h` | `review.next_hunk` | `hunk_test.lua` |
+
+易错点：session picker 必须先关 pi float，否则 `ui.select` 被挡住；`virt_lines_above` 在本机 nvim 是布尔，不是行数组。
 
 ---
 
@@ -208,12 +223,8 @@ Spike 已验证：真实 `tool_execution_start` → `nvim_buf_set_lines` → dif
 
 ---
 
-## 8. 待用户确认
+## 8. 已定
 
-请确认本清单后进入 **implementation plan（writing-plans）**，再按 Wave 1 编码。
-
-可选调整（若有，直接说）：
-
-- 默认 keymap 前缀（`<leader>ai` vs `<leader>p` …）  
-- Accept 是否默认 `:w`  
-- Wave 1 是否必须含 `@` picker（建议必须）  
+- 默认 keymap：`<leader>ai`
+- Accept 默认 `:w`（`write_on_accept = true`）
+- `@` picker 在 Wave 1 范围内，已实现  
