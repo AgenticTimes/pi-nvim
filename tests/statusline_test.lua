@@ -13,7 +13,6 @@ h.assert_truthy(busy:find("·", 1, true), "busy shows elapsed")
 statusline.stop()
 h.assert_eq(statusline.lualine(), "", "idle again after stop")
 
--- start twice is safe; stop twice is safe
 statusline.start()
 statusline.start()
 h.assert_truthy(statusline.lualine() ~= "", "still busy")
@@ -25,6 +24,35 @@ statusline.start()
 h.assert_eq(vim.g.pi_busy, statusline.lualine(), "g:pi_busy mirrors text")
 statusline.stop()
 h.assert_eq(vim.g.pi_busy, "", "g:pi_busy cleared")
+
+-- footer virt_lines land on the chat buffer while busy
+package.loaded["pi.runtime"] = {
+  ensure_started = function() end,
+  prompt = function() end,
+  abort = function() end,
+}
+package.loaded["pi.ui"] = nil
+local ui = require("pi.ui")
+ui.open()
+local chat = ui.chat_buf()
+statusline.start()
+local ns = vim.api.nvim_create_namespace("pi_busy")
+local found = false
+for _, m in ipairs(vim.api.nvim_buf_get_extmarks(chat, ns, 0, -1, { details = true })) do
+  local d = m[4] or {}
+  if d.virt_lines then
+    local t = ""
+    for _, chunk in ipairs(d.virt_lines[1] or {}) do
+      t = t .. tostring(chunk[1])
+    end
+    if t:find("Working", 1, true) then
+      found = true
+    end
+  end
+end
+h.assert_truthy(found, "chat footer virt_lines show Working")
+statusline.stop()
+ui.close()
 
 package.loaded["pi.session"] = nil
 local session = require("pi.session")

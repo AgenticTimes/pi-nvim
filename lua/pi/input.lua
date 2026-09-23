@@ -202,6 +202,9 @@ function M.submit(opts)
   end
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "" })
   require("pi.runtime").prompt(message, opts)
+  pcall(function()
+    require("pi.statusline").repaint()
+  end)
   -- close ask popup after send; stay on chat
   pcall(function()
     require("pi.ui").close_input()

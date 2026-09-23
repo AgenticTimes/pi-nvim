@@ -34,11 +34,16 @@ function M.todos_visible()
   return todos_open and M.sidebar_width() > 0
 end
 
---- Leave room for cmdline + statusline so busy spinner stays visible
+--- Leave room for cmdline + statusline so busy spinner stays visible.
+--- cmdheight=0 still needs a statusline row; when cmdline briefly expands it
+--- can steal a row, so always keep at least one spare under the chat float.
 local function chrome_rows()
   local cmd = math.max(0, vim.o.cmdheight or 0)
   local status = (vim.o.laststatus == 0) and 0 or 1
-  return cmd + status
+  -- one spare when cmdline is hidden so a temporary message does not cover
+  -- the statusline under the float
+  local spare = (cmd == 0 and status > 0) and 1 or 0
+  return cmd + status + spare
 end
 
 --- Chat fills the editor to the right of the todo sidebar
@@ -584,6 +589,9 @@ function M.open()
   require("pi.render").attach_scroll(wins.chat, M.chat_buf())
   require("pi.render").stick()
   require("pi.render").follow(M.chat_buf(), true)
+  pcall(function()
+    require("pi.statusline").repaint()
+  end)
   if todos_open then
     M.refresh_todos()
     apply_todos_layout()
