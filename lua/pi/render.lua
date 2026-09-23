@@ -83,18 +83,42 @@ local function new_ns()
   return vim.api.nvim_create_namespace("pi_box_" .. box_seq)
 end
 
+--- Width of a window's sign column. `getwininfo().textoff` does not always include
+--- it, and a box drawn even one cell wider than the text area wraps its own right
+--- border onto the next visual row (see bubble_inner_width).
+local function signcol_width(win)
+  local sc = tostring(vim.wo[win].signcolumn)
+  local n = tonumber(sc:match(":(%d+)$"))
+  if n then
+    return n
+  end
+  if sc == "no" then
+    return 0
+  end
+  return sc == "auto" and 1 or 2
+end
+
+--- Text-area width of the last window the chat was painted in. Blocks are also
+--- rendered into scratch buffers (history paging) where there is no window to
+--- measure, and the chat window can be much narrower than the screen (todo
+--- sidebar), so remember the real width instead of guessing from `columns`.
+local last_avail = nil
+
 local function bubble_inner_width(buf)
   local wins = vim.fn.win_findbuf(buf)
   local avail
   if wins[1] then
-    local info = vim.fn.getwininfo(wins[1])[1]
-    if info then
-      avail = info.width - (info.textoff or 0)
-    else
-      avail = vim.api.nvim_win_get_width(wins[1])
-    end
+    local win = wins[1]
+    local info = vim.fn.getwininfo(win)[1]
+    local width = (info and info.width) or vim.api.nvim_win_get_width(win)
+    local off = (info and info.textoff) or 0
+    -- trust textoff when it reports something, otherwise the signs are unaccounted
+    avail = width - (off > 0 and off or signcol_width(win))
+    last_avail = avail
   else
-    avail = vim.o.columns
+    -- no window here (scratch buffer, or the chat is closed): reuse the width the
+    -- chat window had, and stay narrower than the screen when we never saw one
+    avail = last_avail or (vim.o.columns - 4)
   end
   -- leave 2 cells for left/right │
   return math.max(10, avail - 2)
@@ -811,7 +835,10 @@ local function tool_block(buf, name, args, ok, count, err)
       raw[#raw + 1] = "  ! " .. l
     end
   end
-  local width = math.max(20, bubble_inner_width(buf) - 1)
+  -- 2-cell safety margin: the box is painted after this, possibly in a window a
+  -- little narrower than the one measured here, and a line even one cell too
+  -- wide soft-wraps ('linebreak') which pushes the right border off the box edge
+  local width = math.max(20, bubble_inner_width(buf) - 3)
   local lines = {}
   for _, l in ipairs(raw) do
     for _, w in ipairs(wrap_line(l, width, "  ")) do

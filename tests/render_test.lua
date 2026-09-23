@@ -295,9 +295,11 @@ h.assert_eq(bodies, rows, "one body mark per thinking row")
 h.assert_eq(tops, 1, "exactly one top rule")
 h.assert_eq(bottoms, 1, "exactly one bottom rule")
 
--- every boxed row pads out to the same inner width (border lands on the box edge)
+-- every boxed row pads out to the same inner width, and box + sign column must
+-- fill the window exactly: one cell wider and the right border wraps onto the
+-- next visual row, because nvim cannot draw virt_text on a wrapped segment
 local info = vim.fn.getwininfo(win)[1]
-local inner = math.max(10, info.width - (info.textoff or 0) - 2)
+local textoff = info.textoff or 0
 local widths = {}
 for row in pairs(body_by_row) do
   h.assert_truthy(eol_by_row[row], "row has a right border")
@@ -308,7 +310,11 @@ h.assert_eq(vim.tbl_count(widths), rows, "one right border per row")
 local pads = vim.tbl_values(widths)
 table.sort(pads)
 h.assert_eq(pads[1] + 10, pads[#pads] + 5, "both rows pad out to one inner width")
-h.assert_eq(pads[#pads] + 5, inner, "right border lands on the box edge")
+local inner = pads[#pads] + 5
+-- box (inner + 2 borders) must fit in the text area (width - textoff); one cell
+-- wider soft-wraps the right border onto the next visual row
+h.assert_truthy(inner + 2 <= info.width - textoff, "box fits the text area")
+h.assert_eq(inner + 2, info.width - textoff, "box + textoff fills the window")
 
 -- hammering one line with deltas must not stack marks
 render.on_event(b, { type = "message_update", assistantMessageEvent = { type = "thinking_delta", delta = "z" } })

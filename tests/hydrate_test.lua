@@ -117,17 +117,22 @@ local saw_dashed, saw_square = false, false
 local label_of = { PiYouBar = "user", PiToolBar = "toolcall", PiThinkBar = "thinking" }
 local label_seen = {}
 for _, box in ipairs(h.box_namespaces()) do
-  local role, top, top_chunks
+  local role, top, top_chunks, bottom
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(roles, box.ns, 0, -1, { details = true })) do
     local d = m[4] or {}
     if d.sign_hl_group then
       role = d.sign_hl_group
     end
-    if d.virt_lines and d.virt_lines_above then
-      top_chunks = d.virt_lines[1]
-      top = ""
-      for _, chunk in ipairs(top_chunks) do
-        top = top .. tostring(chunk[1])
+    if d.virt_lines then
+      local txt = ""
+      for _, chunk in ipairs(d.virt_lines[1]) do
+        txt = txt .. tostring(chunk[1])
+      end
+      if d.virt_lines_above then
+        top_chunks = d.virt_lines[1]
+        top = txt
+      else
+        bottom = txt
       end
     end
     if top and top:find("┄", 1, true) then
@@ -140,8 +145,10 @@ for _, box in ipairs(h.box_namespaces()) do
   if role and top and label_of[role] then
     label_seen[role] = true
     h.assert_truthy(top:find(label_of[role], 1, true) ~= nil, role .. " label in the top rule: " .. top)
-    -- the label must not push the corner off the box edge
-    h.assert_eq(vim.fn.strdisplaywidth(top), vim.o.columns, "label keeps the box width: " .. top)
+    -- the label must not change the box width: top rule == bottom rule, and the box
+    -- must stay inside the screen or its right corner is clipped off the edge
+    h.assert_eq(vim.fn.strdisplaywidth(top), vim.fn.strdisplaywidth(bottom), "label keeps the box width")
+    h.assert_truthy(vim.fn.strdisplaywidth(top) <= vim.o.columns, "box fits the screen: " .. top)
     -- and it is its own chunk so it can carry its own highlight
     local own = false
     for _, chunk in ipairs(top_chunks) do
