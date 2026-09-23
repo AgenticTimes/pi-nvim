@@ -323,6 +323,10 @@ function M.abort()
   if client.is_running() then
     client.send({ type = "abort" })
   end
+  require("pi.session").set_status("idle")
+  pcall(function()
+    require("pi.statusline").stop()
+  end)
 end
 
 function M.new_session()

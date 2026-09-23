@@ -20,6 +20,19 @@ function M.reset()
   state.session_name = nil
   state.session_file = nil
   -- keep mode
+  pcall(function()
+    require("pi.statusline").stop()
+  end)
+end
+
+local function sync_busy()
+  pcall(function()
+    if state.status == "streaming" then
+      require("pi.statusline").start()
+    else
+      require("pi.statusline").stop()
+    end
+  end)
 end
 
 function M.apply_state(data)
@@ -40,8 +53,10 @@ function M.apply_state(data)
   end
   if data.isStreaming then
     state.status = "streaming"
+    sync_busy()
   elseif data.isStreaming == false then
     state.status = "idle"
+    sync_busy()
   end
 end
 
@@ -96,8 +111,10 @@ end
 function M.on_event(ev)
   if ev.type == "agent_start" then
     state.status = "streaming"
+    sync_busy()
   elseif ev.type == "agent_end" then
     state.status = "idle"
+    sync_busy()
   elseif ev.type == "response" and ev.command == "cycle_model" and ev.data then
     state.model = ev.data.model or ev.data
   elseif ev.type == "response" and ev.command == "set_model" and ev.data then
