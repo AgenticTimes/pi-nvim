@@ -21,6 +21,11 @@ statusline.stop()
 statusline.stop()
 h.assert_eq(statusline.lualine(), "", "double stop idle")
 
+statusline.start()
+h.assert_eq(vim.g.pi_busy, statusline.lualine(), "g:pi_busy mirrors text")
+statusline.stop()
+h.assert_eq(vim.g.pi_busy, "", "g:pi_busy cleared")
+
 package.loaded["pi.session"] = nil
 local session = require("pi.session")
 session.reset()

@@ -1,4 +1,4 @@
--- Busy Working spinner for host statuslines (lualine component)
+-- Busy Working spinner for host statuslines (lualine) and the chat winbar
 local M = {}
 
 local FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
@@ -17,10 +17,35 @@ local function close_timer()
   timer = nil
 end
 
+local function paint_chat_winbar(text)
+  pcall(function()
+    local win = require("pi.ui").chat_win()
+    if not win or not vim.api.nvim_win_is_valid(win) then
+      return
+    end
+    if text == "" then
+      vim.wo[win].winbar = ""
+    else
+      vim.wo[win].winbar = "%#PiBusy#" .. text .. "%*"
+    end
+  end)
+end
+
+local function ensure_hl()
+  if vim.fn.hlexists("PiBusy") == 0 then
+    vim.api.nvim_set_hl(0, "PiBusy", { fg = 0xe0af68, bold = true })
+  end
+end
+
 local function refresh()
+  ensure_hl()
+  local text = M.text()
+  vim.g.pi_busy = text
+  paint_chat_winbar(text)
   pcall(function()
     require("lualine").refresh({ place = { "statusline" } })
   end)
+  pcall(vim.cmd.redrawstatus)
 end
 
 function M.text()
@@ -39,6 +64,7 @@ function M.start()
   if started_at then
     return
   end
+  ensure_hl()
   started_at = vim.uv.hrtime()
   frame = 1
   close_timer()

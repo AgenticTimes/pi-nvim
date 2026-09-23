@@ -72,3 +72,5 @@ pi.nvim itself does not patch the user's lualine setup automatically.
 3. Agent finishes or abort → spinner gone on the next refresh.
 4. Idle → `lualine()` returns `""` (no empty separators left behind when
    `cond` is used).
+5. Fullscreen chat float must leave one row for the statusline (`laststatus ≠ 0`)
+   so the spinner is not covered while the chat is open.

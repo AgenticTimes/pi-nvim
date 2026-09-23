@@ -34,13 +34,19 @@ function M.todos_visible()
   return todos_open and M.sidebar_width() > 0
 end
 
+--- Leave room for cmdline + statusline so busy spinner stays visible
+local function chrome_rows()
+  local cmd = math.max(0, vim.o.cmdheight or 0)
+  local status = (vim.o.laststatus == 0) and 0 or 1
+  return cmd + status
+end
+
 --- Chat fills the editor to the right of the todo sidebar
 local function chat_geometry()
-  local cmd = math.max(1, vim.o.cmdheight or 1)
   local side = M.sidebar_width()
   return {
     width = math.max(20, vim.o.columns - side),
-    height = math.max(8, vim.o.lines - cmd),
+    height = math.max(8, vim.o.lines - chrome_rows()),
     row = 0,
     col = side,
     border = "none",
@@ -48,10 +54,9 @@ local function chat_geometry()
 end
 
 local function todos_geometry()
-  local cmd = math.max(1, vim.o.cmdheight or 1)
   return {
     width = M.sidebar_width(),
-    height = math.max(8, vim.o.lines - cmd),
+    height = math.max(8, vim.o.lines - chrome_rows()),
     row = 0,
     col = 0,
   }

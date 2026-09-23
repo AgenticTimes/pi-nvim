@@ -298,6 +298,10 @@ function M.prompt(message, opts)
     payload.streamingBehavior = opts.streamingBehavior
   end
   require("pi.client").send(payload)
+  -- Optimistic busy: agent_start can lag; keep statusline visible immediately.
+  if not session.is_busy() then
+    session.set_status("streaming")
+  end
 end
 
 function M.run(message, opts)

@@ -30,6 +30,8 @@ local cfg = vim.api.nvim_win_get_config(chat_win)
 h.assert_eq(cfg.width, vim.o.columns, "chat full width")
 h.assert_eq(cfg.row, 0, "row 0")
 h.assert_eq(cfg.col, 0, "todos hidden by default")
+local reserve = math.max(0, vim.o.cmdheight or 0) + ((vim.o.laststatus == 0) and 0 or 1)
+h.assert_eq(cfg.height, vim.o.lines - reserve, "leaves statusline row")
 
 ui.open_input()
 h.assert_truthy(ui.is_input_open(), "input popup open")

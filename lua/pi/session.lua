@@ -91,6 +91,7 @@ end
 
 function M.set_status(s)
   state.status = s
+  sync_busy()
 end
 
 function M.touched()
