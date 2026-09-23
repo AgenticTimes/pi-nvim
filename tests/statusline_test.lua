@@ -25,7 +25,6 @@ h.assert_eq(vim.g.pi_busy, statusline.lualine(), "g:pi_busy mirrors text")
 statusline.stop()
 h.assert_eq(vim.g.pi_busy, "", "g:pi_busy cleared")
 
--- footer virt_lines land on the chat buffer while busy
 package.loaded["pi.runtime"] = {
   ensure_started = function() end,
   prompt = function() end,
@@ -34,24 +33,27 @@ package.loaded["pi.runtime"] = {
 package.loaded["pi.ui"] = nil
 local ui = require("pi.ui")
 ui.open()
-local chat = ui.chat_buf()
 statusline.start()
-local ns = vim.api.nvim_create_namespace("pi_busy")
-local found = false
-for _, m in ipairs(vim.api.nvim_buf_get_extmarks(chat, ns, 0, -1, { details = true })) do
-  local d = m[4] or {}
-  if d.virt_lines then
-    local t = ""
-    for _, chunk in ipairs(d.virt_lines[1] or {}) do
-      t = t .. tostring(chunk[1])
-    end
-    if t:find("Working", 1, true) then
-      found = true
-    end
+local overlay
+for _, w in ipairs(vim.api.nvim_list_wins()) do
+  local cfg = vim.api.nvim_win_get_config(w)
+  if cfg.relative == "win" and cfg.height == 1 and cfg.anchor == "SW" then
+    overlay = w
+    break
   end
 end
-h.assert_truthy(found, "chat footer virt_lines show Working")
+h.assert_truthy(overlay, "busy overlay float open")
+local line = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(overlay), 0, 1, false)[1] or ""
+h.assert_truthy(line:find("Working", 1, true), "overlay shows Working: " .. line)
 statusline.stop()
+local still = false
+for _, w in ipairs(vim.api.nvim_list_wins()) do
+  local cfg = vim.api.nvim_win_get_config(w)
+  if cfg.relative == "win" and cfg.height == 1 and cfg.anchor == "SW" then
+    still = true
+  end
+end
+h.assert_false(still, "overlay closed on stop")
 ui.close()
 
 package.loaded["pi.session"] = nil
