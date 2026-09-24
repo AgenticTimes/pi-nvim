@@ -145,6 +145,8 @@ local win = vim.api.nvim_open_win(b, false, {
   col = 1,
   style = "minimal",
 })
+-- match chat float: bar lives in virt_text, not a sign gutter
+vim.wo[win].signcolumn = "no"
 vim.api.nvim_win_set_cursor(win, { 1, 0 })
 local tmp = vim.api.nvim_create_buf(false, true)
 local other = vim.api.nvim_open_win(tmp, true, {
@@ -271,23 +273,31 @@ local marks = h.box_marks(b, h.last_box_ns(b))
 h.assert_eq(#marks, 2 * rows + 2, "2 marks per row + 2 rules, no accumulation")
 
 local bodies, tops, bottoms = 0, 0, 0
-local eol_by_row, body_by_row = {}, {}
+local right_col_by_row, body_by_row = {}, {}
+local top_w, bot_w
 for _, m in ipairs(marks) do
   local d = m[4] or {}
   if d.line_hl_group == "PiThinkBubble" then
     bodies = bodies + 1
     body_by_row[m[2]] = true
   end
-  if d.virt_text_pos == "eol" then
+  if d.virt_text_win_col ~= nil then
     local vt = d.virt_text[1]
     h.assert_eq(vt[2], "PiThinkBorder", "right border uses the role border hl")
-    eol_by_row[m[2]] = vim.fn.strdisplaywidth(vt[1])
+    h.assert_truthy(d.virt_text_repeat_linebreak, "right border repeats on soft-wrapped rows")
+    right_col_by_row[m[2]] = d.virt_text_win_col
   end
-  for _, _ in ipairs(d.virt_lines or {}) do
+  if d.virt_lines then
+    local s = ""
+    for _, chunk in ipairs(d.virt_lines[1] or {}) do
+      s = s .. tostring(chunk[1])
+    end
     if d.virt_lines_above then
       tops = tops + 1
+      top_w = vim.fn.strdisplaywidth(s)
     else
       bottoms = bottoms + 1
+      bot_w = vim.fn.strdisplaywidth(s)
     end
   end
 end
@@ -295,34 +305,35 @@ h.assert_eq(bodies, rows, "one body mark per thinking row")
 h.assert_eq(tops, 1, "exactly one top rule")
 h.assert_eq(bottoms, 1, "exactly one bottom rule")
 
--- every boxed row pads out to the same inner width, and box + sign column must
--- fill the window exactly: one cell wider and the right border wraps onto the
--- next visual row, because nvim cannot draw virt_text on a wrapped segment
+-- every boxed row pins the right border at the same window column; top/bottom
+-- rules fill exactly the text area (display-width aware for CJK/ambiwidth)
 local info = vim.fn.getwininfo(win)[1]
-local textoff = info.textoff or 0
-local widths = {}
-for row in pairs(body_by_row) do
-  h.assert_truthy(eol_by_row[row], "row has a right border")
-  widths[row] = eol_by_row[row]
-end
-h.assert_eq(vim.tbl_count(widths), rows, "one right border per row")
--- pad = inner - 1 - content_w, so pad + 1 + content_w == inner for every row
-local pads = vim.tbl_values(widths)
-table.sort(pads)
-h.assert_eq(pads[1] + 10, pads[#pads] + 5, "both rows pad out to one inner width")
-local inner = pads[#pads] + 5
--- box (inner + 2 borders) must fit in the text area (width - textoff); one cell
--- wider soft-wraps the right border onto the next visual row
-h.assert_truthy(inner + 2 <= info.width - textoff, "box fits the text area")
-h.assert_eq(inner + 2, info.width - textoff, "box + textoff fills the window")
+local avail = info.width - (info.textoff or 0)
+h.assert_eq(vim.tbl_count(right_col_by_row), rows, "one right border per row")
+local cols = vim.tbl_values(right_col_by_row)
+table.sort(cols)
+h.assert_eq(cols[1], cols[#cols], "all right borders share one column")
+h.assert_eq(cols[1], avail - vim.fn.strdisplaywidth("┊"), "right border at window edge")
+h.assert_eq(top_w, avail, "top rule fills the text area")
+h.assert_eq(bot_w, avail, "bottom rule fills the text area")
+h.assert_eq(top_w, bot_w, "top and bottom rules match")
 
--- hammering one line with deltas must not stack marks
+-- hammering one line with deltas must not stack marks (hard-wrap may add a
+-- row or two in a narrow window; still O(rows), never O(deltas))
 render.on_event(b, { type = "message_update", assistantMessageEvent = { type = "thinking_delta", delta = "z" } })
 for _ = 1, 40 do
   render.on_event(b, { type = "message_update", assistantMessageEvent = { type = "thinking_delta", delta = "x" } })
 end
 render.on_event(b, { type = "message_update", assistantMessageEvent = { type = "thinking_end" } })
-h.assert_eq(#h.box_marks(b, h.last_box_ns(b)), 2 + 2, "no mark accumulation after 41 deltas into one row")
+local after = h.box_marks(b, h.last_box_ns(b))
+local body_n = 0
+for _, m in ipairs(after) do
+  if m[4] and m[4].line_hl_group == "PiThinkBubble" then
+    body_n = body_n + 1
+  end
+end
+h.assert_truthy(body_n >= 1 and body_n <= 3, "few body rows after 41 deltas, not one per char")
+h.assert_eq(#after, 2 * body_n + 2, "2 marks per row + 2 rules, no accumulation")
 
 pcall(vim.api.nvim_win_close, win, true)
 pcall(vim.api.nvim_win_close, other, true)

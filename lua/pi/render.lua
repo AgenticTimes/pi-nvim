@@ -83,19 +83,54 @@ local function new_ns()
   return vim.api.nvim_create_namespace("pi_box_" .. box_seq)
 end
 
---- Width of a window's sign column. `getwininfo().textoff` does not always include
---- it, and a box drawn even one cell wider than the text area wraps its own right
---- border onto the next visual row (see bubble_inner_width).
-local function signcol_width(win)
+--- Fixed sign-column width when `textoff` is 0. `auto`/`auto:N` only grow when a
+--- sign is present (textoff already reflects that), so inventing a cell here made
+--- boxes one cell too narrow and left a gap next to `┌`/`└`.
+local function fixed_signcol_width(win)
   local sc = tostring(vim.wo[win].signcolumn)
-  local n = tonumber(sc:match(":(%d+)$"))
-  if n then
-    return n
-  end
   if sc == "no" then
     return 0
   end
-  return sc == "auto" and 1 or 2
+  local n = tonumber(sc:match("^yes:(%d+)$"))
+  if n then
+    return n
+  end
+  if sc == "yes" then
+    return 2
+  end
+  return 0
+end
+
+local function disp_w(s)
+  return vim.fn.strdisplaywidth(s or "")
+end
+
+--- Fill exactly `width` display cells with `ch` (ambiwidth=double makes ─/│
+--- two cells; string.rep by char count then overshoots and the right border
+--- wraps / fails to close). Remainder is spaces when `ch` is wider than 1.
+local function rep_to_width(ch, width)
+  if width <= 0 then
+    return ""
+  end
+  local cw = disp_w(ch)
+  if cw <= 0 then
+    return string.rep(" ", width)
+  end
+  local n = math.floor(width / cw)
+  local s = string.rep(ch, n)
+  local got = n * cw
+  if got < width then
+    s = s .. string.rep(" ", width - got)
+  end
+  return s
+end
+
+--- Display widths of box chrome for a style. With ambiwidth=double (common in
+--- CJK setups) bar/│/─ are 2 cells each — never hard-code 1.
+local function style_chrome(style)
+  local bar_w = (style.bar and style.bar ~= "") and disp_w(style.bar) or 0
+  local side_w = disp_w(style.v)
+  return bar_w, side_w
 end
 
 --- Text-area width of the last window the chat was painted in. Blocks are also
@@ -104,7 +139,7 @@ end
 --- sidebar), so remember the real width instead of guessing from `columns`.
 local last_avail = nil
 
-local function bubble_inner_width(buf)
+local function bubble_avail(buf)
   local wins = vim.fn.win_findbuf(buf)
   local avail
   if wins[1] then
@@ -112,16 +147,25 @@ local function bubble_inner_width(buf)
     local info = vim.fn.getwininfo(win)[1]
     local width = (info and info.width) or vim.api.nvim_win_get_width(win)
     local off = (info and info.textoff) or 0
-    -- trust textoff when it reports something, otherwise the signs are unaccounted
-    avail = width - (off > 0 and off or signcol_width(win))
+    -- prefer textoff; if it reports 0, only subtract a *fixed* yes:N gutter
+    avail = width - (off > 0 and off or fixed_signcol_width(win))
     last_avail = avail
   else
     -- no window here (scratch buffer, or the chat is closed): reuse the width the
     -- chat window had, and stay narrower than the screen when we never saw one
     avail = last_avail or (vim.o.columns - 4)
   end
-  -- leave 2 cells for left/right │
-  return math.max(10, avail - 2)
+  return avail
+end
+
+--- Inner stretch width: avail − bar − left side − right side.
+local function bubble_inner_width(buf, style)
+  local avail = bubble_avail(buf)
+  local bar_w, side_w = 1, 1
+  if style then
+    bar_w, side_w = style_chrome(style)
+  end
+  return math.max(10, avail - bar_w - 2 * side_w), avail
 end
 
 local function push_bubble(buf, b)
@@ -134,46 +178,68 @@ local function push_bubble(buf, b)
 end
 
 --- Top rule with the role label tucked into its left corner:
---- `╭─ user ───────╮` / `╭┄ thinking ┄┄┄╮` / `┌─ toolcall ───┐`
+--- `▌╭─ user ───────╮` / `▏╭┄ thinking ┄┄┄╮` / `▌┌─ toolcall ───┐`
+--- Left bar is virt_text (same column as the box), not signcolumn — signs sit
+--- outside the text area and made `▌` stick out past `┌`/`└`.
+--- Horizontal fill uses display width so ambiwidth=double / CJK does not blow
+--- past the window and leave the right corner unclosed.
 local function top_rule(style, inner)
+  local chunks = {}
+  if style.bar and style.bar ~= "" then
+    chunks[#chunks + 1] = { style.bar, style.bar_hl }
+  end
   local label = style.label
   if not label or label == "" then
-    return { { style.tl .. string.rep(style.h, inner) .. style.tr, style.border_hl } }
+    chunks[#chunks + 1] = { style.tl .. rep_to_width(style.h, inner) .. style.tr, style.border_hl }
+    return chunks
   end
   local head = style.h .. " "
   local tail = " "
-  local used = vim.fn.strdisplaywidth(head .. label .. tail)
+  local used = disp_w(head .. label .. tail)
   if used >= inner then
-    return { { style.tl .. string.rep(style.h, inner) .. style.tr, style.border_hl } }
+    chunks[#chunks + 1] = { style.tl .. rep_to_width(style.h, inner) .. style.tr, style.border_hl }
+    return chunks
   end
-  return {
-    { style.tl .. head, style.border_hl },
-    { label, style.label_hl },
-    { tail .. string.rep(style.h, inner - used) .. style.tr, style.border_hl },
-  }
+  chunks[#chunks + 1] = { style.tl .. head, style.border_hl }
+  chunks[#chunks + 1] = { label, style.label_hl }
+  chunks[#chunks + 1] = { tail .. rep_to_width(style.h, inner - used) .. style.tr, style.border_hl }
+  return chunks
+end
+
+local function bottom_rule(style, inner)
+  local chunks = {}
+  if style.bar and style.bar ~= "" then
+    chunks[#chunks + 1] = { style.bar, style.bar_hl }
+  end
+  chunks[#chunks + 1] = { style.bl .. rep_to_width(style.h, inner) .. style.br, style.border_hl }
+  return chunks
 end
 
 --- Paint one boxed row: left bar + bg + side borders + top/bottom rule
-local function paint_row(buf, ns, row, line, style, inner, is_first, is_last)
-  local content_w = vim.fn.strdisplaywidth(line)
-  -- "│ " eats one inner cell (the space after │)
-  local pad = math.max(0, inner - 1 - content_w)
-  -- body: bar + bg + left border
+local function paint_row(buf, ns, row, line, style, inner, avail, is_first, is_last)
+  local _, side_w = style_chrome(style)
+  local left = {}
+  if style.bar and style.bar ~= "" then
+    left[#left + 1] = { style.bar, style.bar_hl }
+  end
+  -- space after │ is part of the inner area (always 1 cell)
+  left[#left + 1] = { style.v .. " ", style.border_hl }
   pcall(vim.api.nvim_buf_set_extmark, buf, ns, row, 0, {
-    sign_text = style.bar,
-    sign_hl_group = style.bar_hl,
     line_hl_group = style.body_hl,
-    virt_text = { { style.v .. " ", style.border_hl } },
+    virt_text = left,
     virt_text_pos = "inline",
     priority = 10,
   })
-  -- right border (padded to inner width)
+  -- pin right border to the window edge; repeat on soft-wrapped screen rows
+  -- (without repeat_linebreak, only the first visual row gets │)
+  local right_col = math.max(0, avail - side_w)
   pcall(vim.api.nvim_buf_set_extmark, buf, ns, row, 0, {
-    virt_text = { { string.rep(" ", pad) .. style.v, style.border_hl } },
-    virt_text_pos = "eol",
+    virt_text = { { style.v, style.border_hl } },
+    virt_text_pos = "overlay",
+    virt_text_win_col = right_col,
+    virt_text_repeat_linebreak = true,
     priority = 11,
   })
-  -- top rule (virt_lines_above is a boolean on this nvim)
   if is_first then
     pcall(vim.api.nvim_buf_set_extmark, buf, ns, row, 0, {
       virt_lines = { top_rule(style, inner) },
@@ -181,10 +247,9 @@ local function paint_row(buf, ns, row, line, style, inner, is_first, is_last)
       priority = 12,
     })
   end
-  -- bottom rule
   if is_last then
     pcall(vim.api.nvim_buf_set_extmark, buf, ns, row, 0, {
-      virt_lines = { { { style.bl .. string.rep(style.h, inner) .. style.br, style.border_hl } } },
+      virt_lines = { bottom_rule(style, inner) },
       virt_lines_above = false,
       priority = 12,
     })
@@ -202,11 +267,11 @@ local function paint_box(b)
   if b.end0 <= b.start0 then
     return
   end
-  local inner = bubble_inner_width(buf)
+  local inner, avail = bubble_inner_width(buf, b.style)
   local lines = vim.api.nvim_buf_get_lines(buf, b.start0, b.end0, false)
   for i, line in ipairs(lines) do
     local row = b.start0 + i - 1
-    paint_row(buf, b.ns, row, line, b.style, inner, row == b.start0, i == #lines)
+    paint_row(buf, b.ns, row, line, b.style, inner, avail, row == b.start0, i == #lines)
   end
 end
 
@@ -312,9 +377,10 @@ local function decorate_line(buf, lnum0, line)
     return
   end
   if in_you_body then
+    -- legacy ### you rows: bar as inline virt_text (same column as boxed chrome)
     pcall(vim.api.nvim_buf_set_extmark, buf, role_ns, lnum0, 0, {
-      sign_text = "▌",
-      sign_hl_group = "PiYouBar",
+      virt_text = { { "▌", "PiYouBar" } },
+      virt_text_pos = "inline",
       priority = 10,
     })
   elseif in_thinking_body then
@@ -669,6 +735,41 @@ function M.append(buf, line)
   schedule_follow(buf)
 end
 
+--- Hard-wrap a line to `width` display cells. Soft-wrap still gets a right
+--- border via virt_text_repeat_linebreak, but hard-wrap keeps content from
+--- painting under the │ and avoids awkward mid-glyph breaks.
+local function wrap_line(text, width, indent)
+  if width < 8 or vim.fn.strdisplaywidth(text) <= width then
+    return { text }
+  end
+  local out = {}
+  local rest = text
+  while vim.fn.strdisplaywidth(rest) > width do
+    local i = vim.fn.strchars(rest)
+    while i > 1 and vim.fn.strdisplaywidth(vim.fn.strcharpart(rest, 0, i)) > width do
+      i = i - 1
+    end
+    out[#out + 1] = vim.fn.strcharpart(rest, 0, i)
+    rest = (indent or "") .. vim.fn.strcharpart(rest, i)
+  end
+  out[#out + 1] = rest
+  return out
+end
+
+--- Max buffer-line width inside a box (inner minus the post-│ space).
+local function content_wrap_width(buf, style)
+  local inner = bubble_inner_width(buf, style)
+  return math.max(8, inner - 1)
+end
+
+--- Append one logical line, hard-wrapped to the box content width.
+local function append_wrapped_line(buf, line, style, indent)
+  local width = content_wrap_width(buf, style)
+  for _, w in ipairs(wrap_line(line, width, indent or "")) do
+    M.append(buf, w)
+  end
+end
+
 --- User turn: blue bar + box + light bg (no "you" label)
 function M.append_user(buf, text)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
@@ -682,7 +783,7 @@ function M.append_user(buf, text)
   M.append(buf, "")
   local start0 = vim.api.nvim_buf_line_count(buf)
   for line in (tostring(text) .. "\n"):gmatch("(.-)\n") do
-    M.append(buf, line)
+    append_wrapped_line(buf, line, STYLES.user)
   end
   commit_box(buf, STYLES.user, start0, vim.api.nvim_buf_line_count(buf))
 end
@@ -699,7 +800,7 @@ function M.append_thinking(buf, text)
   M.append(buf, "")
   local start0 = vim.api.nvim_buf_line_count(buf)
   for line in (tostring(text) .. "\n"):gmatch("(.-)\n") do
-    M.append(buf, line)
+    append_wrapped_line(buf, line, STYLES.thinking)
   end
   in_thinking_body = false
   commit_box(buf, STYLES.thinking, start0, vim.api.nvim_buf_line_count(buf))
@@ -799,26 +900,6 @@ local function result_text(result)
   return table.concat(texts, "\n")
 end
 
---- Hard-wrap a line to `width` display cells. nvim cannot put virt_text on the
---- wrapped segments of a buffer line, so a too-long line escapes the box border.
-local function wrap_line(text, width, indent)
-  if width < 8 or vim.fn.strdisplaywidth(text) <= width then
-    return { text }
-  end
-  local out = {}
-  local rest = text
-  while vim.fn.strdisplaywidth(rest) > width do
-    local i = vim.fn.strchars(rest)
-    while i > 1 and vim.fn.strdisplaywidth(vim.fn.strcharpart(rest, 0, i)) > width do
-      i = i - 1
-    end
-    out[#out + 1] = vim.fn.strcharpart(rest, 0, i)
-    rest = indent .. vim.fn.strcharpart(rest, i)
-  end
-  out[#out + 1] = rest
-  return out
-end
-
 --- One tool call as a block: header line, argument lines, optional error text
 local function tool_block(buf, name, args, ok, count, err)
   local mark = ok == nil and "…" or (ok and "✓" or "✗")
@@ -835,10 +916,10 @@ local function tool_block(buf, name, args, ok, count, err)
       raw[#raw + 1] = "  ! " .. l
     end
   end
-  -- 2-cell safety margin: the box is painted after this, possibly in a window a
-  -- little narrower than the one measured here, and a line even one cell too
-  -- wide soft-wraps ('linebreak') which pushes the right border off the box edge
-  local width = math.max(20, bubble_inner_width(buf) - 3)
+  -- keep content inside the inner area (after the post-│ space); extra margin
+  -- for emoji/CJK terminals that draw wider than strdisplaywidth reports
+  local inner = bubble_inner_width(buf, STYLES.tool)
+  local width = math.max(20, inner - 1 - 2)
   local lines = {}
   for _, l in ipairs(raw) do
     for _, w in ipairs(wrap_line(l, width, "  ")) do
@@ -987,6 +1068,9 @@ local function append_text_delta(buf, delta)
   local start0 = line_count(buf)
   -- if appending after structural line, new lines start at start0; else may extend last line
   local extended_last = false
+  -- boxed streams hard-wrap so soft-wrap is rare; right border still repeats if it happens
+  local wrap_style = streaming_thinking and STYLES.thinking or nil
+  local wrap_w = wrap_style and content_wrap_width(buf, wrap_style) or nil
   with_write(buf, function()
     local n = line_count(buf)
     local last = vim.api.nvim_buf_get_lines(buf, n - 1, n, false)[1] or ""
@@ -997,14 +1081,26 @@ local function append_text_delta(buf, delta)
       if text == "" and last == "" then
         return
       end
-      vim.api.nvim_buf_set_lines(buf, -1, -1, false, { text })
+      if wrap_w then
+        for _, w in ipairs(wrap_line(text or "", wrap_w, "")) do
+          vim.api.nvim_buf_set_lines(buf, -1, -1, false, { w })
+        end
+      else
+        vim.api.nvim_buf_set_lines(buf, -1, -1, false, { text })
+      end
     end
 
     if is_structural_line(last) or last == "" then
       push_line(parts[1])
     else
       extended_last = true
-      vim.api.nvim_buf_set_lines(buf, n - 1, n, false, { last .. (parts[1] or "") })
+      local merged = last .. (parts[1] or "")
+      if wrap_w and vim.fn.strdisplaywidth(merged) > wrap_w then
+        local wrapped = wrap_line(merged, wrap_w, "")
+        vim.api.nvim_buf_set_lines(buf, n - 1, n, false, wrapped)
+      else
+        vim.api.nvim_buf_set_lines(buf, n - 1, n, false, { merged })
+      end
     end
 
     for i = 2, #parts do

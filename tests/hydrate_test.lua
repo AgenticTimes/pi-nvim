@@ -44,27 +44,32 @@ h.assert_false(joined:find("### assistant", 1, true), "no assistant header")
 h.assert_truthy(joined:find("· resumed session", 1, true), "footer")
 h.assert_false(joined:find("noise", 1, true), "no toolResult body")
 
--- user bubble has blue bar + box + bg (box chrome lives in its own namespace)
+-- user bubble has blue bar + box + bg (bar is virt_text, not signcolumn)
 local marks = h.box_marks(b)
 local has_bar = false
 local has_bubble = false
 local has_box = false
 for _, m in ipairs(marks) do
   local d = m[4] or {}
-  if d.sign_hl_group == "PiYouBar" or d.sign_text == "▌" then
-    has_bar = true
-  end
   if d.line_hl_group == "PiYouBubble" then
     has_bubble = true
   end
   if d.virt_lines then
-    local chunk = d.virt_lines[1] and d.virt_lines[1][1]
-    if chunk and (tostring(chunk[1]):find("╭", 1, true) or tostring(chunk[1]):find("╰", 1, true)) then
-      has_box = true
+    for _, chunk in ipairs(d.virt_lines[1] or {}) do
+      local txt = tostring(chunk[1])
+      if chunk[2] == "PiYouBar" or txt:find("▌", 1, true) then
+        has_bar = true
+      end
+      if txt:find("╭", 1, true) or txt:find("╰", 1, true) then
+        has_box = true
+      end
     end
   end
   if d.virt_text then
     for _, vt in ipairs(d.virt_text) do
+      if vt[2] == "PiYouBar" or tostring(vt[1]):find("▌", 1, true) then
+        has_bar = true
+      end
       if vt[2] == "PiYouBorder" then
         has_box = true
       end
@@ -91,18 +96,28 @@ render.hydrate(roles, {
 }, { footer = false })
 local rmarks = h.box_marks(roles)
 local boxes = {}
+local bar_hls = { PiYouBar = true, PiToolBar = true, PiThinkBar = true }
 for _, m in ipairs(rmarks) do
   local d = m[4] or {}
-  if d.sign_hl_group then
-    boxes[d.sign_hl_group] = boxes[d.sign_hl_group] or { lines = {} }
-    local e = boxes[d.sign_hl_group]
-    e.lines[m[2]] = true
-    e.bar = d.sign_text
-    e.border = nil
-    for _, vt in ipairs(d.virt_text or {}) do
-      if vt[2] ~= d.sign_hl_group then
-        e.border = vt[2]
+  for _, vt in ipairs(d.virt_text or {}) do
+    local hl = vt[2]
+    if bar_hls[hl] then
+      boxes[hl] = boxes[hl] or { lines = {} }
+      local e = boxes[hl]
+      e.lines[m[2]] = true
+      e.bar = vt[1]
+      for _, other in ipairs(d.virt_text) do
+        if other[2] ~= hl and tostring(other[2] or ""):find("Border", 1, true) then
+          e.border = other[2]
+        end
       end
+    end
+  end
+  for _, chunk in ipairs((d.virt_lines and d.virt_lines[1]) or {}) do
+    local hl = chunk[2]
+    if bar_hls[hl] then
+      boxes[hl] = boxes[hl] or { lines = {} }
+      boxes[hl].bar = boxes[hl].bar or chunk[1]
     end
   end
 end
@@ -112,7 +127,7 @@ end
 h.assert_eq(vim.trim(boxes["PiThinkBar"].bar), "▏", "thinking uses its own left bar glyph")
 h.assert_truthy(boxes["PiThinkBar"].border == "PiThinkBorder", "thinking border hl")
 h.assert_truthy(boxes["PiToolBar"].border == "PiToolBorder", "tool border hl")
--- thinking glyph set differs from tool glyph set
+
 local saw_dashed, saw_square = false, false
 local label_of = { PiYouBar = "user", PiToolBar = "toolcall", PiThinkBar = "thinking" }
 local label_seen = {}
@@ -120,13 +135,18 @@ for _, box in ipairs(h.box_namespaces()) do
   local role, top, top_chunks, bottom
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(roles, box.ns, 0, -1, { details = true })) do
     local d = m[4] or {}
-    if d.sign_hl_group then
-      role = d.sign_hl_group
+    for _, vt in ipairs(d.virt_text or {}) do
+      if label_of[vt[2]] then
+        role = vt[2]
+      end
     end
     if d.virt_lines then
       local txt = ""
       for _, chunk in ipairs(d.virt_lines[1]) do
         txt = txt .. tostring(chunk[1])
+        if label_of[chunk[2]] then
+          role = chunk[2]
+        end
       end
       if d.virt_lines_above then
         top_chunks = d.virt_lines[1]
@@ -134,22 +154,20 @@ for _, box in ipairs(h.box_namespaces()) do
       else
         bottom = txt
       end
-    end
-    if top and top:find("┄", 1, true) then
-      saw_dashed = true
-    end
-    if top and top:find("┌", 1, true) then
-      saw_square = true
+      if top and top:find("┄", 1, true) then
+        saw_dashed = true
+      end
+      if top and top:find("┌", 1, true) then
+        saw_square = true
+      end
     end
   end
   if role and top and label_of[role] then
     label_seen[role] = true
     h.assert_truthy(top:find(label_of[role], 1, true) ~= nil, role .. " label in the top rule: " .. top)
-    -- the label must not change the box width: top rule == bottom rule, and the box
-    -- must stay inside the screen or its right corner is clipped off the edge
+    h.assert_truthy(top:find("▌", 1, true) or top:find("▏", 1, true), "top carries left bar: " .. top)
     h.assert_eq(vim.fn.strdisplaywidth(top), vim.fn.strdisplaywidth(bottom), "label keeps the box width")
     h.assert_truthy(vim.fn.strdisplaywidth(top) <= vim.o.columns, "box fits the screen: " .. top)
-    -- and it is its own chunk so it can carry its own highlight
     local own = false
     for _, chunk in ipairs(top_chunks) do
       if chunk[1] == label_of[role] then

@@ -31,10 +31,30 @@ local runtime = require("pi.runtime")
 runtime.ensure_started()
 h.assert_eq(#started, 1, "started once")
 local cmd = table.concat(started[1], " ")
-h.assert_truthy(cmd:find("nvim_replace_in_buffer", 1, true), "auto has host tools")
+h.assert_truthy(cmd:find("nvim_host_tools", 1, true), "auto loads host extension")
+h.assert_false(cmd:find("no%-builtin%-tools", 1, false) or cmd:find("no-builtin-tools", 1, true), "builtins enabled")
+h.assert_false(cmd:find("%-t ", 1, false) or cmd:find(" -t ", 1, true), "no tools allowlist")
+h.assert_truthy(cmd:find("exclude%-tools", 1, false) or cmd:find("exclude-tools", 1, true), "excludes edit/write")
+h.assert_truthy(cmd:find("edit,write", 1, true) or cmd:find("edit", 1, true), "exclude list present")
 h.assert_truthy(not cmd:find("%-%-no%-tools"), "auto not no-tools")
 
+-- empty tools_exclude → full builtins including edit/write
+package.loaded["pi.config"] = nil
+package.loaded["pi.runtime"] = nil
+started = {}
+require("pi.config").setup({ mode = "auto", tools_exclude = "" })
+runtime = require("pi.runtime")
+runtime.ensure_started()
+local full = table.concat(started[#started], " ")
+h.assert_false(full:find("exclude%-tools", 1, false) or full:find("exclude-tools", 1, true), "no exclude when empty")
+h.assert_false(full:find("no-builtin-tools", 1, true), "still builtins")
+
 -- toggle to chat
+package.loaded["pi.config"] = nil
+package.loaded["pi.runtime"] = nil
+require("pi.config").setup({ mode = "auto" })
+runtime = require("pi.runtime")
+runtime.ensure_started()
 package.loaded["pi.client"].is_running = function()
   return true
 end

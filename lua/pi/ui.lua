@@ -88,7 +88,7 @@ local function configure_chat_win(win)
   vim.wo[win].linebreak = true
   vim.wo[win].breakindent = true
   vim.wo[win].showbreak = "↪ "
-  vim.wo[win].signcolumn = "yes:1"
+  vim.wo[win].signcolumn = "no"
   -- Opaque: global NormalFloat is often transparent (theme), which shows the editor through
   pcall(function()
     vim.wo[win].winhl = "Normal:PiChatNormal,NormalFloat:PiChatNormal,FloatBorder:PiChatBorder"

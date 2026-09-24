@@ -33,8 +33,12 @@ M.opts = {
   busy_submit = "steer", -- "steer" | "followUp" when agent is streaming
   --- stream thinking as gray text (no role labels; OpenCode-style)
   show_thinking = true,
-  --- "auto" = host tools enabled; "chat" = --no-tools (no tool calls)
+  --- "auto" = builtins + nvim host tools; "chat" = --no-tools
   mode = "auto",
+  --- Soft tool preference (pi has no priority API). Default drops disk
+  --- edit/write so nvim_replace_in_buffer owns buffer mutations. Set to ""
+  --- or {} for a full builtin set including edit/write. bash/read/grep stay on.
+  tools_exclude = { "edit", "write" },
   --- confirm dialogs: ask | smart | auto | deny
   approve = "ask",
   --- after export_html, open the file (edit / system open)

@@ -2,7 +2,7 @@
 
 Neovim-native frontend for [pi](https://github.com/earendil-works/pi) coding agent.
 
-**Wave 1:** chat/input UI · `pi --mode rpc` · host tools (`nvim_replace_in_buffer` / `nvim_read_buffer`) · multi-file review with **Accept / Reject**.
+**Wave 1:** chat/input UI · `pi --mode rpc` · host tools (`nvim_*`) + builtins (`bash`/`read`/`grep`/…) · multi-file review with **Accept / Reject** (disk `edit`/`write` excluded by default so host tools own buffer mutations).
 
 **Wave 2:** busy steer/follow-up · history · model/thinking · fullscreen · session picker · slash `/` · Tab · `]]`/`[[` · Accept/Reject all · `:PiRun` · `nvim_open`/`nvim_goto`.
 

@@ -1,9 +1,9 @@
 /**
- * Host tools for Neovim: replace/read via extension_ui bridge.
- * Spawn with:
- *   pi --mode rpc --no-extensions --no-builtin-tools \
- *     -t nvim_replace_in_buffer,nvim_read_buffer,nvim_open,nvim_goto \
- *     -e ./extensions/nvim_host_tools.ts
+ * Host tools for Neovim: replace/read/open/goto via extension_ui bridge.
+ * Spawn with builtins enabled (no --no-builtin-tools). Prefer excluding
+ * disk edit/write so mutations go through nvim_* and Accept/Reject works:
+ *   pi --mode rpc --no-extensions -e ./extensions/nvim_host_tools.ts \
+ *     --exclude-tools edit,write
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -15,7 +15,7 @@ export default function (pi: ExtensionAPI) {
     name: "nvim_replace_in_buffer",
     label: "nvim_replace_in_buffer",
     description:
-      "Replace exact text in a Neovim buffer (host IDE applies the edit; does not write via agent filesystem tools).",
+      "Preferred for edits in Neovim: replace exact text in a host buffer (includes unsaved changes; Accept/Reject applies). Use instead of edit/write when the file may be open.",
     parameters: Type.Object({
       path: Type.String({ description: "File path relative to cwd or absolute" }),
       old_text: Type.String({ description: "Exact text to find" }),
@@ -45,7 +45,8 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "nvim_read_buffer",
     label: "nvim_read_buffer",
-    description: "Read file contents from the Neovim host buffer (includes unsaved changes).",
+    description:
+      "Preferred for reading open files: return Neovim buffer text (includes unsaved changes). Use instead of read when the file may be open in the editor.",
     parameters: Type.Object({
       path: Type.String({ description: "File path relative to cwd or absolute" }),
     }),

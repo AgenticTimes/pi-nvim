@@ -4,7 +4,10 @@ local function extension_path()
   return require("pi.config").root() .. "/extensions/nvim_host_tools.ts"
 end
 
-local HOST_TOOLS = "nvim_replace_in_buffer,nvim_read_buffer,nvim_open,nvim_goto"
+--- Soft preference only: pi has no tool-priority API. Excluding disk edit/write
+--- steers mutations through nvim_* so Accept/Reject still works.
+local DEFAULT_EXCLUDE = "edit,write"
+
 local resume_scheduled = false
 local hydrate_opts ---@type table|nil
 local pending_hydrate_path ---@type string|nil
@@ -196,13 +199,20 @@ local function build_cmd(opts)
   if mode == "chat" then
     table.insert(cmd, "--no-tools")
   else
-    vim.list_extend(cmd, {
-      "--no-builtin-tools",
-      "-t",
-      HOST_TOOLS,
-      "-e",
-      ext,
-    })
+    -- Builtins (bash/read/grep/…) on; host extension registers nvim_*.
+    -- No --tools allowlist (that would hide builtins). Optional exclude list
+    -- is the only “prefer nvim for edits” knob pi exposes.
+    vim.list_extend(cmd, { "-e", ext })
+    local exclude = config.opts.tools_exclude
+    if exclude == nil then
+      exclude = DEFAULT_EXCLUDE
+    end
+    if type(exclude) == "table" then
+      exclude = table.concat(exclude, ",")
+    end
+    if type(exclude) == "string" and exclude ~= "" then
+      vim.list_extend(cmd, { "--exclude-tools", exclude })
+    end
   end
   if opts.no_session then
     table.insert(cmd, "--no-session")
