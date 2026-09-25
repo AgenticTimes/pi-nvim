@@ -14,6 +14,8 @@ function M.short_name(name)
   return name:gsub("^nvim_", "")
 end
 
+--- Cap one argument value so a whole file (write/edit content) cannot be
+--- rendered into the chat.
 local function clip(s)
   if vim.fn.strchars(s) <= MAX_ARG_CHARS then
     return s

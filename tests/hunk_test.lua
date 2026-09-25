@@ -41,9 +41,13 @@ for name, id in pairs(vim.api.nvim_get_namespaces()) do
     for _, m in ipairs(marks) do
       local d = m[4] or {}
       if d.virt_lines_above and d.virt_lines then
+        -- boxed hint = 3 virt rows (top rule / label / bottom rule); the label
+        -- with "A/R all" lives in the middle row, so scan every row
         local s = ""
-        for _, chunk in ipairs(d.virt_lines[1] or {}) do
-          s = s .. tostring(chunk[1])
+        for _, row in ipairs(d.virt_lines or {}) do
+          for _, chunk in ipairs(row or {}) do
+            s = s .. tostring(chunk[1])
+          end
         end
         h.assert_truthy(s:find("╭", 1, true) or s:find("A/R", 1, true), "boxed hint: " .. s)
         h.assert_truthy(s:find("A/R", 1, true) or s:find("all", 1, true), "hint mentions accept-all")

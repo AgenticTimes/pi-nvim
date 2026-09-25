@@ -1,4 +1,28 @@
--- Chat buffer rendering: compact tool lines, collapse repeats, stream assistant text
+-- Chat buffer rendering.
+--
+-- The chat buffer holds ONLY message content; every bit of box chrome (left
+-- bar, borders, role label, row background) lives in extmarks, so yank/copy of
+-- the transcript stays clean. Layout model:
+--
+--   * a box = a contiguous buffer range [start0, end0) painted with one `STYLES`
+--     palette. `bubbles[buf]` is the Lua-side registry of painted boxes; jump /
+--     resize / collapse read it instead of extmark rows (those drift when a line
+--     carrying virt_lines is rewritten via nvim_buf_set_lines).
+--   * each box owns its own extmark namespace (`pi_box_<n>`, see new_ns);
+--     repainting = wipe that namespace and redraw, immune to the drift above.
+--   * boxes that are still streaming (thinking / assistant text / tool batches)
+--     are held in `*_box` handles and grown with grow_box().
+--
+-- Hard invariants — break these and the border visually falls apart:
+--   * box width (inner + side borders) + sign column must equal the window's
+--     text area: one cell wider and the right border wraps onto the next row
+--     (bubble_inner_width / fixed_signcol_width).
+--   * no buffer line inside a box may exceed the box width: nvim cannot draw
+--     virt_text on wrapped segments, so an over-long line loses its side
+--     borders on continuation rows. All boxed content is hard-wrapped via
+--     wrap_line at append time (append_wrapped_line / append_text_delta).
+--   * tool collapse ×N keys on the rendered block text, so identical calls
+--     stay stable even after wrapping/capping (upsert_tool_end).
 local M = {}
 
 local Rtext = require("pi.render.text")
@@ -106,9 +130,9 @@ local asst_box = nil
 local box_seq = 0
 local bubble_resize_autocmd ---@type integer|nil
 
---- Each box owns an extmark namespace so a repaint is "wipe the namespace, redraw".
---- Range-scoped clears are unreliable here: virt_lines + nvim_buf_set_lines shifts
---- the stored row of the edited line, so a stale mark survives the clear.
+--- 每个 box 独占一个 extmark namespace，重绘 = 清空整个 namespace 再画。
+--- 按行范围清是不可靠的：virt_lines + nvim_buf_set_lines 会平移被改写行的
+--- 存储行号，导致旧 mark 清不掉、每次流式 delta 都会残留堆积。
 local function new_ns()
   box_seq = box_seq + 1
   return vim.api.nvim_create_namespace("pi_box_" .. box_seq)
@@ -231,6 +255,7 @@ local function realign_md_table_at(buf, end0, pad)
   vim.api.nvim_buf_set_lines(buf, start0, end0, false, out)
 end
 
+--- Append box `b` to the buffer's box list (registry order = paint order).
 local function push_bubble(buf, b)
   local list = bubbles[buf]
   if not list then
@@ -269,6 +294,7 @@ local function top_rule(style, inner)
   return chunks
 end
 
+--- Bottom rule; mirrors top_rule's left bar so `▌└…┘` corners stay flush.
 local function bottom_rule(style, inner)
   local chunks = {}
   if style.bar and style.bar ~= "" then
@@ -365,7 +391,7 @@ local function count_assistant_boxes(buf)
   return n
 end
 
---- Per-box style copy with turn number in the top-left (same slot as "toolcall").
+--- 为 assistant 样式做一份副本，左上角写轮次序号（与 "toolcall" 同一槽位）。
 local function make_assistant_style(buf)
   local s = vim.tbl_extend("force", {}, STYLES.assistant)
   s.label = "#" .. tostring(count_assistant_boxes(buf) + 1)
@@ -451,12 +477,15 @@ local function note_tool_lines(buf, first1, last1)
   tool_box = { buf = buf, box = commit_box(buf, STYLES.tool, s0, e0) }
 end
 
+--- Redraw every remembered box (VimResized / WinResized repaint).
 local function repaint_bubbles(buf)
   for _, b in ipairs(bubbles[buf] or {}) do
     paint_box(b)
   end
 end
 
+--- Decorate one appended line with text-level marks (legacy role headers from
+--- old sessions, thinking gray italic). Box chrome is painted separately.
 local function decorate_line(buf, lnum0, line)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
     return
@@ -515,6 +544,9 @@ local function decorate_range(buf, start0, count)
   decorate_appended(buf, start0, lines)
 end
 
+--- Configure one chat buffer: nofile, pi-chat filetype (treesitter markdown
+--- highlights without host renderers attaching), lock for editing, fallback
+--- highlight groups, and the window-resize repaint hook.
 function M.setup(buf)
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "hide"
@@ -588,6 +620,9 @@ local function with_write(buf, fn)
   end
 end
 
+--- Clear all chat state for `buf` (boxes, decorations, streaming handles) and
+--- re-seed the buffer with the "# pi chat" header. Also drops the history
+--- cursor so a fresh session does not continue an old transcript.
 function M.reset(buf)
   pending = {}
   last_tool = nil
@@ -695,6 +730,7 @@ end
 local follow_timer ---@type uv.uv_timer_t|nil
 local suspend_follow = false
 
+--- Coalesce rapid stream deltas into one follow-scroll ~per frame (30ms timer).
 local function schedule_follow(buf)
   if suspend_follow then
     return
@@ -831,6 +867,8 @@ function M.attach_scroll(win, buf)
   vim.keymap.set("n", "P", "<Nop>", opts)
 end
 
+--- Append one line to the end of the chat buffer (splits embedded "\n"; resets
+--- the tool-collapse chain so any non-tool content breaks a ×N run).
 function M.append(buf, line)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
     return
@@ -908,6 +946,8 @@ local function line_count(buf)
   return vim.api.nvim_buf_line_count(buf)
 end
 
+--- Stash the full/collapsed tool payload on the current tool box so
+--- toggle_tool_at_cursor can expand/collapse it without re-asking the client.
 local function attach_tool_payload(buf, full, expanded, has_err)
   if tool_box and tool_box.buf == buf and tool_box.box then
     local b = tool_box.box
@@ -946,6 +986,8 @@ end
 --- One tool call as a block: header line, argument lines, optional error text
 local function tool_block(buf, name, args, ok, count, err)
   local inner = bubble_inner_width(buf, STYLES.tool)
+  -- 比 box 内宽再提前 2 格折行：哪怕只超 1 格，linebreak 也会把最后一词
+  -- 折到下一行，续行上就看不到右边框了
   local width = math.max(20, inner - 1 - 2)
   return Rtools.tool_block_lines(name, args, ok, count, err, width)
 end
@@ -973,11 +1015,15 @@ local function mark_error_lines(buf, first, n)
   end
 end
 
+--- Render one finished tool call into the chat, folding identical consecutive
+--- calls into the previous block (×N) so a tool loop does not spam the buffer.
 local function upsert_tool_end(buf, name, args, ok, err)
   local has_err = err and err ~= ""
   local full = tool_block(buf, name, args, ok, 1, err)
   local key = table.concat(full, "\n")
-  -- identical consecutive calls collapse onto the first block (×N)
+  -- Collapse identical consecutive calls onto the first block (×N). The key is
+  -- the rendered block text, so a wrapping/capping change breaks the chain the
+  -- same way a different call would — no stale ×N left on edited lines.
   if
     ok
     and last_tool
@@ -1017,6 +1063,9 @@ local function upsert_tool_end(buf, name, args, ok, err)
   end
 end
 
+--- `]]` / `[[` navigation between turns. A "turn" is any box start (user, tool,
+--- thinking, answer) read from the box registry — never from extmark rows, which
+--- drift when a boxed line is rewritten.
 function M.jump_message(buf, win, dir)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
     return
@@ -1099,6 +1148,8 @@ function M.toggle_tool_at_cursor(buf, win)
     vim.api.nvim_buf_set_lines(buf, target.start0, target.end0, false, display)
   end)
   local new_n = #display
+  -- collapse/expand changes the line count: shift every later box and the
+  -- streaming handles so the registry stays in sync with the buffer
   local delta = new_n - (old_end - target.start0)
   target.tool_expanded = expanded
   target.end0 = target.start0 + new_n
@@ -1135,6 +1186,9 @@ function M.toggle_tool_at_cursor(buf, win)
   return true
 end
 
+--- Open an answer box (#N label) before the first text_delta of a turn.
+--- Answers get a full box (not bare text) so their body aligns with toolcall
+--- rows; the #N label is assigned at open time, then renumbered on history prepend.
 local function ensure_assistant_header(buf)
   if streaming_thinking then
     streaming_thinking = false
@@ -1154,6 +1208,7 @@ local function ensure_assistant_header(buf)
   asst_box = { buf = buf, box = open_box(buf, make_assistant_style(buf)) }
 end
 
+--- Open the gray dashed thinking box on the first thinking delta of a turn.
 local function ensure_thinking_header(buf)
   if streaming_thinking then
     return
@@ -1191,6 +1246,14 @@ local function append_assistant_line(buf, text)
   append_wrapped_line(buf, text, STYLES.assistant)
 end
 
+--- Stream one text/thinking delta into the currently open box.
+---
+--- Deltas arrive as arbitrary chunks: a chunk may continue the last buffer line
+--- (merge), start a new one, or contain its own "\n"s. The chunked parse keeps
+--- a trailing "\n" as a beginning-of-line flag (`stream_at_bol`) instead of
+--- vim.split's phantom final "" row, which used to insert blank lines between
+--- markdown table rows. Markdown tables are never hard-wrapped (that breaks
+--- column alignment) — they are realigned instead (realign_md_table_at).
 local function append_text_delta(buf, delta)
   delta = tostring(delta):gsub("\r\n", "\n"):gsub("\r", "\n")
   local start0 = line_count(buf)
@@ -1304,6 +1367,10 @@ local function append_text_delta(buf, delta)
   schedule_follow(buf)
 end
 
+--- Agent-session event → chat rendering. The renderer is a pure projection of
+--- these events; tools are rendered once on `tool_execution_end` (name + args +
+--- error text), assistant text/thinking stream delta-by-delta, and errors surface
+--- as red lines (agent_end / message_update error).
 function M.on_event(buf, ev)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
     return
@@ -1598,6 +1665,9 @@ local function paint_messages(buf, messages)
   return count
 end
 
+--- Move every box/streaming-handle at or after `at` (0-based) by `delta` lines,
+--- keeping the registry in sync when lines are inserted/removed above them
+--- (history prepend, tool expand/collapse).
 local function shift_bubbles(buf, at, delta)
   if not delta or delta == 0 then
     return
@@ -1647,6 +1717,8 @@ function M.load_older(buf, win)
     history_loading = false
     return false
   end
+  -- paint into a scratch buffer so the live transcript state (streaming boxes,
+  -- pending tools, collapse chain) is untouched; the boxes are re-homed below
   local saved = {
     pending = pending,
     last_tool = last_tool,
@@ -1749,6 +1821,9 @@ function M.load_older(buf, win)
   return true
 end
 
+--- Paint the initial/resumed transcript (hydrate) into `buf`. History support
+--- records the paging cursor in history_by_buf so gg / scroll-to-top can fetch
+--- older turns later.
 function M.hydrate(buf, messages, opts)
   opts = opts or {}
   if not buf or not vim.api.nvim_buf_is_valid(buf) then

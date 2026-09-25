@@ -37,6 +37,8 @@ end
 --- Leave room for cmdline + statusline so busy spinner stays visible.
 --- cmdheight=0 still needs a statusline row; when cmdline briefly expands it
 --- can steal a row, so always keep at least one spare under the chat float.
+--- Height budget the floats may use: cmdline + statusline + one spare row so a
+--- temporary cmdline message never covers the statusline under the float.
 local function chrome_rows()
   local cmd = math.max(0, vim.o.cmdheight or 0)
   local status = (vim.o.laststatus == 0) and 0 or 1
@@ -378,6 +380,8 @@ function M.is_fullscreen()
   return fullscreen
 end
 
+--- (Re)place the chat float: full editor minus the todo sidebar; reconfigures
+--- the window and re-applies window options (wrap, signcolumn) on every call.
 local function apply_chat_layout()
   if not M.is_open() then
     return
