@@ -518,7 +518,10 @@ end
 function M.setup(buf)
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "hide"
-  vim.bo[buf].filetype = "markdown"
+  -- pi-chat (not markdown): keeps TS markdown highlights without host
+  -- renderers like render-markdown.nvim attaching and fighting box chrome
+  vim.bo[buf].filetype = "pi-chat"
+  pcall(vim.treesitter.language.register, "markdown", "pi-chat")
   vim.bo[buf].swapfile = false
   vim.bo[buf].modifiable = false
   vim.bo[buf].readonly = true

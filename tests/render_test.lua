@@ -6,6 +6,7 @@ package.loaded["pi.render"] = nil
 local render = require("pi.render")
 local b = vim.api.nvim_create_buf(false, true)
 render.setup(b)
+h.assert_eq(vim.bo[b].filetype, "pi-chat", "chat ft isolates from markdown renderers")
 render.reset(b)
 
 -- 5 identical successful reads → one collapsed line
