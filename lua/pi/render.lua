@@ -185,6 +185,132 @@ local function assistant_line_width(buf)
   return math.max(8, bubble_avail(buf) - g)
 end
 
+--- Markdown table row (optional leading gutter spaces).
+local function is_md_table_row(s)
+  local t = vim.trim(s or "")
+  return t:find("^|") ~= nil and t:find("|$") ~= nil
+end
+
+local function split_md_cells(s)
+  local t = vim.trim(s or "")
+  t = t:gsub("^|", ""):gsub("|$", "")
+  local cells = vim.split(t, "|", { plain = true })
+  for i, c in ipairs(cells) do
+    cells[i] = vim.trim(c)
+  end
+  return cells
+end
+
+local function is_md_sep_row(cells)
+  if #cells == 0 then
+    return false
+  end
+  for _, c in ipairs(cells) do
+    if c ~= "" and not c:match("^:?%-+:?$") then
+      return false
+    end
+  end
+  return true
+end
+
+local function pad_md_cell(text, width)
+  local w = disp_w(text)
+  if w >= width then
+    return text
+  end
+  return text .. string.rep(" ", width - w)
+end
+
+local function format_md_sep(cell, width)
+  local left = cell:sub(1, 1) == ":"
+  local right = #cell > 0 and cell:sub(-1) == ":"
+  local inner = width - (left and 1 or 0) - (right and 1 or 0)
+  inner = math.max(3, inner)
+  return (left and ":" or "-") .. string.rep("-", math.max(0, inner - 1)) .. (right and ":" or "")
+end
+
+--- Pad markdown table columns to equal display width (CJK-safe).
+local function align_md_table(raw_lines)
+  local rows = {}
+  for _, line in ipairs(raw_lines) do
+    rows[#rows + 1] = split_md_cells(line)
+  end
+  local ncols = 0
+  for _, r in ipairs(rows) do
+    ncols = math.max(ncols, #r)
+  end
+  if ncols == 0 then
+    return raw_lines
+  end
+  local widths = {}
+  for c = 1, ncols do
+    widths[c] = 3
+  end
+  for _, r in ipairs(rows) do
+    if not is_md_sep_row(r) then
+      for c = 1, ncols do
+        widths[c] = math.max(widths[c], disp_w(r[c] or ""))
+      end
+    end
+  end
+  local out = {}
+  for _, r in ipairs(rows) do
+    local parts = {}
+    local sep = is_md_sep_row(r)
+    for c = 1, ncols do
+      local cell = r[c] or ""
+      if sep then
+        parts[c] = format_md_sep(cell == "" and "---" or cell, widths[c])
+      else
+        parts[c] = pad_md_cell(cell, widths[c])
+      end
+    end
+    out[#out + 1] = "| " .. table.concat(parts, " | ") .. " |"
+  end
+  return out
+end
+
+--- Realign the contiguous markdown table ending at `end0` (0-based exclusive).
+local function realign_md_table_at(buf, end0, pad)
+  pad = pad or ""
+  local pad_w = disp_w(pad)
+  local n = vim.api.nvim_buf_line_count(buf)
+  end0 = math.min(end0 or n, n)
+  if end0 <= 0 then
+    return
+  end
+  local start0 = end0 - 1
+  while start0 >= 0 do
+    local line = vim.api.nvim_buf_get_lines(buf, start0, start0 + 1, false)[1] or ""
+    if not is_md_table_row(line) then
+      break
+    end
+    start0 = start0 - 1
+  end
+  start0 = start0 + 1
+  if end0 - start0 < 2 then
+    return
+  end
+  local raw = vim.api.nvim_buf_get_lines(buf, start0, end0, false)
+  local stripped = {}
+  for _, line in ipairs(raw) do
+    local body = line
+    if pad_w > 0 and disp_w(line) >= pad_w and line:sub(1, #pad) == pad then
+      body = line:sub(#pad + 1)
+    else
+      body = vim.trim(line)
+    end
+    stripped[#stripped + 1] = body
+  end
+  local aligned = align_md_table(stripped)
+  local out = {}
+  for _, line in ipairs(aligned) do
+    out[#out + 1] = pad .. line
+  end
+  -- caller must hold with_write (or buffer writable)
+  vim.api.nvim_buf_set_lines(buf, start0, end0, false, out)
+end
+
 local function push_bubble(buf, b)
   local list = bubbles[buf]
   if not list then
@@ -1086,6 +1212,14 @@ local function append_assistant_line(buf, text)
     return
   end
   local pad = assistant_pad()
+  -- never hard-wrap table rows — that breaks column alignment
+  if is_md_table_row(text) then
+    M.append(buf, pad .. text)
+    with_write(buf, function()
+      realign_md_table_at(buf, vim.api.nvim_buf_line_count(buf), pad)
+    end)
+    return
+  end
   local width = assistant_line_width(buf)
   for _, w in ipairs(wrap_line(pad .. text, width, pad)) do
     M.append(buf, w)
@@ -1107,6 +1241,7 @@ local function append_text_delta(buf, delta)
   elseif is_asst then
     wrap_w = assistant_line_width(buf)
   end
+  local saw_table = false
   with_write(buf, function()
     local n = line_count(buf)
     local last = vim.api.nvim_buf_get_lines(buf, n - 1, n, false)[1] or ""
@@ -1118,7 +1253,16 @@ local function append_text_delta(buf, delta)
         return
       end
       if text == "" then
+        if is_asst and is_md_table_row(last) then
+          realign_md_table_at(buf, n, pad)
+        end
         vim.api.nvim_buf_set_lines(buf, -1, -1, false, { "" })
+        return
+      end
+      local table_row = is_asst and is_md_table_row(text)
+      if table_row then
+        saw_table = true
+        vim.api.nvim_buf_set_lines(buf, -1, -1, false, { pad .. text })
         return
       end
       local line = pad ~= "" and (pad .. text) or text
@@ -1134,9 +1278,17 @@ local function append_text_delta(buf, delta)
     if is_structural_line(last) or last == "" then
       push_line(parts[1] or "")
     else
+      -- extending last line: if it's becoming/keeping a table row, don't wrap
       extended_last = true
       local merged = last .. (parts[1] or "")
-      if wrap_w and vim.fn.strdisplaywidth(merged) > wrap_w then
+      local body = merged
+      if pad ~= "" and merged:sub(1, #pad) == pad then
+        body = merged:sub(#pad + 1)
+      end
+      if is_asst and is_md_table_row(body) then
+        saw_table = true
+        vim.api.nvim_buf_set_lines(buf, n - 1, n, false, { pad .. vim.trim(body) })
+      elseif wrap_w and vim.fn.strdisplaywidth(merged) > wrap_w then
         local wrapped = wrap_line(merged, wrap_w, pad)
         vim.api.nvim_buf_set_lines(buf, n - 1, n, false, wrapped)
       else
@@ -1146,6 +1298,10 @@ local function append_text_delta(buf, delta)
 
     for i = 2, #parts do
       push_line(parts[i])
+    end
+
+    if saw_table then
+      realign_md_table_at(buf, line_count(buf), pad)
     end
   end)
   local end0 = line_count(buf)

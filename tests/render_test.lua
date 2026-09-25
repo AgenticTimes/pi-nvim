@@ -239,6 +239,30 @@ for _, l in ipairs(lines) do
 end
 h.assert_truthy(answer_line and answer_line:match("^%s+final answer"), "answer indented like box body")
 h.assert_eq(answer_line:match("^(%s*)"), "   ", "answer left gutter matches ▌│ ")
+
+-- markdown tables pad columns to display width (CJK-safe) and keep the gutter
+render.on_event(b, { type = "agent_start" })
+render.on_event(b, {
+  type = "message_update",
+  assistantMessageEvent = {
+    type = "text_delta",
+    delta = "| 列1 | 列2 |\n| --- | --- |\n| a | 中文 |\n| longer | x |\n",
+  },
+})
+local table_lines = {}
+for _, l in ipairs(vim.api.nvim_buf_get_lines(b, 0, -1, false)) do
+  if l:find("|", 1, true) then
+    table_lines[#table_lines + 1] = l
+  end
+end
+h.assert_truthy(#table_lines >= 4, "table rows present")
+local tw = vim.fn.strdisplaywidth(table_lines[1])
+for i = 2, #table_lines do
+  h.assert_eq(vim.fn.strdisplaywidth(table_lines[i]), tw, "table row widths match: " .. table_lines[i])
+end
+h.assert_eq(table_lines[1]:match("^(%s*)"), "   ", "table keeps left gutter")
+h.assert_truthy(table_lines[1]:find("列1", 1, true), "header cell kept")
+
 -- thinking lines have PiThinking mark
 local tns = vim.api.nvim_get_namespaces()["pi_role"]
 local tmarks = vim.api.nvim_buf_get_extmarks(b, tns, 0, -1, { details = true })
