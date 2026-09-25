@@ -100,13 +100,26 @@ end
 
 function M.record_edit(entry)
   table.insert(state.touched, entry)
+  pcall(function()
+    require("pi.statusline").repaint()
+  end)
 end
 
 function M.remove_touched(idx)
   if idx < 1 or idx > #state.touched then
     return nil
   end
-  return table.remove(state.touched, idx)
+  local removed = table.remove(state.touched, idx)
+  pcall(function()
+    require("pi.statusline").repaint()
+  end)
+  pcall(function()
+    local buf = require("pi.ui").chat_buf()
+    if buf then
+      require("pi.render").note_pending_review(buf)
+    end
+  end)
+  return removed
 end
 
 function M.on_event(ev)
@@ -116,6 +129,9 @@ function M.on_event(ev)
   elseif ev.type == "agent_end" then
     state.status = "idle"
     sync_busy()
+    pcall(function()
+      require("pi.statusline").repaint()
+    end)
   elseif ev.type == "response" and ev.command == "cycle_model" and ev.data then
     state.model = ev.data.model or ev.data
   elseif ev.type == "response" and ev.command == "set_model" and ev.data then

@@ -540,6 +540,7 @@ function M.setup(buf)
     vim.api.nvim_set_hl(0, "PiThinking", { fg = 0xa9b1d6, italic = true })
     vim.api.nvim_set_hl(0, "PiAgent", { fg = 0xbb9af7, bold = true })
     vim.api.nvim_set_hl(0, "PiError", { fg = 0xf7768e, bold = true })
+    vim.api.nvim_set_hl(0, "PiReview", { fg = 0xe0af68, bold = true })
   end
   vim.api.nvim_create_autocmd("InsertEnter", {
     buffer = buf,
@@ -1374,6 +1375,7 @@ function M.on_event(buf, ev)
         end
       end
     end
+    M.note_pending_review(buf)
     schedule_follow(buf)
     return
   end
@@ -1761,6 +1763,58 @@ function M.hydrate(buf, messages, opts)
   stick_bottom = true
   schedule_follow(buf)
   return count
+end
+
+local REVIEW_HINT_RE = "^◎ %d+ files? pending review"
+
+--- After agent_end: remind if host-tool edits are waiting for Accept/Reject.
+function M.note_pending_review(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  local n = 0
+  pcall(function()
+    n = #require("pi.session").touched()
+  end)
+  local line
+  if n <= 0 then
+    line = nil
+  elseif n == 1 then
+    line = "◎ 1 file pending review · :PiDiff"
+  else
+    line = string.format("◎ %d files pending review · :PiDiff", n)
+  end
+  local last = vim.api.nvim_buf_get_lines(buf, -2, -1, false)[1] or ""
+  local prev_is_hint = last:match(REVIEW_HINT_RE) ~= nil
+  if not line then
+    if prev_is_hint then
+      with_write(buf, function()
+        vim.api.nvim_buf_set_lines(buf, -2, -1, false, {})
+      end)
+    end
+    pcall(function()
+      require("pi.statusline").repaint()
+    end)
+    return
+  end
+  if prev_is_hint then
+    with_write(buf, function()
+      vim.api.nvim_buf_set_lines(buf, -2, -1, false, { line })
+    end)
+  else
+    M.append(buf, "")
+    local start0 = vim.api.nvim_buf_line_count(buf)
+    M.append(buf, line)
+    local painted = vim.api.nvim_buf_get_lines(buf, start0, start0 + 1, false)[1] or line
+    pcall(vim.api.nvim_buf_set_extmark, buf, role_ns, start0, 0, {
+      end_col = #painted,
+      hl_group = "PiReview",
+      hl_eol = true,
+    })
+  end
+  pcall(function()
+    require("pi.statusline").repaint()
+  end)
 end
 
 return M

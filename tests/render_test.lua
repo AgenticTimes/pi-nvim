@@ -483,5 +483,27 @@ end
 h.assert_truthy(body_n >= 1 and body_n <= 3, "few body rows after 41 deltas, not one per char")
 h.assert_eq(#after, 2 * body_n + 2, "2 marks per row + 2 rules, no accumulation")
 
+-- pending review hint after agent_end; clears when touched empties
+package.loaded["pi.session"] = nil
+local session = require("pi.session")
+session.reset()
+session.record_edit({ path = "r1", rel = "r1", before = { "x" }, buf = 0 })
+session.record_edit({ path = "r2", rel = "r2", before = { "y" }, buf = 0 })
+render.on_event(b, { type = "agent_end" })
+lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
+joined = table.concat(lines, "\n")
+h.assert_truthy(joined:find("◎ 2 files pending review · :PiDiff", 1, true), "plural review hint")
+session.remove_touched(1)
+render.note_pending_review(b)
+lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
+joined = table.concat(lines, "\n")
+h.assert_truthy(joined:find("◎ 1 file pending review · :PiDiff", 1, true), "singular review hint")
+h.assert_false(joined:find("◎ 2 files", 1, true), "count updated in place")
+session.remove_touched(1)
+render.note_pending_review(b)
+lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
+joined = table.concat(lines, "\n")
+h.assert_false(joined:find("pending review", 1, true), "hint removed when empty")
+
 pcall(vim.api.nvim_win_close, win, true)
 pcall(vim.api.nvim_win_close, other, true)

@@ -25,6 +25,17 @@ h.assert_eq(vim.g.pi_busy, statusline.lualine(), "g:pi_busy mirrors text")
 statusline.stop()
 h.assert_eq(vim.g.pi_busy, "", "g:pi_busy cleared")
 
+-- idle with pending edits → Review · N
+package.loaded["pi.session"] = nil
+local session = require("pi.session")
+session.reset()
+session.record_edit({ path = "x", rel = "x", before = { "a" }, buf = 0 })
+statusline.repaint()
+h.assert_eq(statusline.lualine(), "Review · 1", "pending review cue")
+session.remove_touched(1)
+statusline.repaint()
+h.assert_eq(statusline.lualine(), "", "cleared when no pending")
+
 package.loaded["pi.runtime"] = {
   ensure_started = function() end,
   prompt = function() end,

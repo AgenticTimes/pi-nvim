@@ -1,4 +1,4 @@
--- Busy Working spinner: lualine + 1-row overlay on the chat float
+-- Busy Working spinner + idle Review pending cue (lualine / winbar / overlay)
 local M = {}
 
 local FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
@@ -22,6 +22,9 @@ end
 local function ensure_hl()
   if vim.fn.hlexists("PiBusy") == 0 then
     vim.api.nvim_set_hl(0, "PiBusy", { fg = 0xe0af68, bold = true })
+  end
+  if vim.fn.hlexists("PiReview") == 0 then
+    vim.api.nvim_set_hl(0, "PiReview", { fg = 0xe0af68, bold = true })
   end
   if vim.fn.hlexists("PiBusyBar") == 0 then
     local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
@@ -87,13 +90,14 @@ local function paint_overlay(text)
   end)
 end
 
-local function paint_chat_winbar(text)
+local function paint_chat_winbar(text, busy)
   pcall(function()
     local win = require("pi.ui").chat_win()
     if not win or not vim.api.nvim_win_is_valid(win) then
       return
     end
-    local value = text == "" and "" or ("%#PiBusy#" .. text .. "%*")
+    local hl = busy and "PiBusy" or "PiReview"
+    local value = text == "" and "" or ("%#" .. hl .. "#" .. text .. "%*")
     vim.api.nvim_set_option_value("winbar", value, { scope = "local", win = win })
   end)
 end
@@ -102,8 +106,14 @@ local function refresh()
   ensure_hl()
   local text = M.text()
   vim.g.pi_busy = text
-  paint_chat_winbar(text)
-  paint_overlay(text)
+  if started_at then
+    paint_chat_winbar(text, true)
+    paint_overlay(text)
+  else
+    -- idle: show pending Review in winbar; never keep the Working overlay
+    paint_chat_winbar(text, false)
+    close_overlay()
+  end
   pcall(function()
     require("lualine").refresh({ place = { "statusline" } })
   end)
@@ -111,11 +121,18 @@ local function refresh()
 end
 
 function M.text()
-  if not started_at then
-    return ""
+  if started_at then
+    local sec = math.max(0, math.floor((vim.uv.hrtime() - started_at) / 1e9))
+    return string.format("%s Working · %ds", FRAMES[frame], sec)
   end
-  local sec = math.max(0, math.floor((vim.uv.hrtime() - started_at) / 1e9))
-  return string.format("%s Working · %ds", FRAMES[frame], sec)
+  local n = 0
+  pcall(function()
+    n = #require("pi.session").touched()
+  end)
+  if n > 0 then
+    return string.format("Review · %d", n)
+  end
+  return ""
 end
 
 function M.lualine()
@@ -123,9 +140,7 @@ function M.lualine()
 end
 
 function M.repaint()
-  if started_at then
-    refresh()
-  end
+  refresh()
 end
 
 function M.start()
@@ -150,13 +165,14 @@ end
 
 function M.stop()
   if not started_at and not timer then
+    -- still refresh so Review · N can appear after idle clears
+    refresh()
     return
   end
   started_at = nil
   frame = 1
   close_timer()
   refresh()
-  close_overlay()
 end
 
 return M
