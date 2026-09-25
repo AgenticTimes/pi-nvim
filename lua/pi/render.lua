@@ -1,6 +1,18 @@
 -- Chat buffer rendering: compact tool lines, collapse repeats, stream assistant text
 local M = {}
 
+local Rtext = require("pi.render.text")
+local Rtools = require("pi.render.tools")
+local disp_w = Rtext.disp_w
+local rep_to_width = Rtext.rep_to_width
+local wrap_line = Rtext.wrap_line
+local cap_lines = Rtext.cap_lines
+local is_md_table_row = Rtext.is_md_table_row
+local split_md_cells = Rtext.split_md_cells
+local is_md_sep_row = Rtext.is_md_sep_row
+local align_md_table = Rtext.align_md_table
+local collapse_tool_lines = Rtools.collapse_tool_lines
+
 -- pending tools by toolCallId → { name, detail, line }
 local pending = {}
 -- last compact tool summary for collapse: { name, detail, count, line_idx }
@@ -120,30 +132,6 @@ local function fixed_signcol_width(win)
   return 0
 end
 
-local function disp_w(s)
-  return vim.fn.strdisplaywidth(s or "")
-end
-
---- Fill exactly `width` display cells with `ch` (ambiwidth=double makes ─/│
---- two cells; string.rep by char count then overshoots and the right border
---- wraps / fails to close). Remainder is spaces when `ch` is wider than 1.
-local function rep_to_width(ch, width)
-  if width <= 0 then
-    return ""
-  end
-  local cw = disp_w(ch)
-  if cw <= 0 then
-    return string.rep(" ", width)
-  end
-  local n = math.floor(width / cw)
-  local s = string.rep(ch, n)
-  local got = n * cw
-  if got < width then
-    s = s .. string.rep(" ", width - got)
-  end
-  return s
-end
-
 --- Display widths of box chrome for a style. With ambiwidth=double (common in
 --- CJK setups) bar/│/─ are 2 cells each — never hard-code 1.
 local function style_chrome(style)
@@ -185,99 +173,6 @@ local function bubble_inner_width(buf, style)
     bar_w, side_w = style_chrome(style)
   end
   return math.max(10, avail - bar_w - 2 * side_w), avail
-end
-
---- Markdown table row (optional leading gutter spaces).
---- Require ≥2 pipes so a lone "|" mid-stream is not treated as a finished row.
-local function is_md_table_row(s)
-  local t = vim.trim(s or "")
-  if t == "" or t:sub(1, 1) ~= "|" or t:sub(-1) ~= "|" then
-    return false
-  end
-  local n = 0
-  for _ in t:gmatch("|") do
-    n = n + 1
-  end
-  return n >= 2
-end
-
-local function split_md_cells(s)
-  local t = vim.trim(s or "")
-  t = t:gsub("^|", ""):gsub("|$", "")
-  local cells = vim.split(t, "|", { plain = true })
-  for i, c in ipairs(cells) do
-    cells[i] = vim.trim(c)
-  end
-  return cells
-end
-
-local function is_md_sep_row(cells)
-  if #cells == 0 then
-    return false
-  end
-  for _, c in ipairs(cells) do
-    if c ~= "" and not c:match("^:?%-+:?$") then
-      return false
-    end
-  end
-  return true
-end
-
-local function pad_md_cell(text, width)
-  local w = disp_w(text)
-  if w >= width then
-    return text
-  end
-  return text .. string.rep(" ", width - w)
-end
-
-local function format_md_sep(cell, width)
-  local left = cell:sub(1, 1) == ":"
-  local right = #cell > 0 and cell:sub(-1) == ":"
-  local inner = width - (left and 1 or 0) - (right and 1 or 0)
-  inner = math.max(3, inner)
-  return (left and ":" or "-") .. string.rep("-", math.max(0, inner - 1)) .. (right and ":" or "")
-end
-
---- Pad markdown table columns to equal display width (CJK-safe).
-local function align_md_table(raw_lines)
-  local rows = {}
-  for _, line in ipairs(raw_lines) do
-    rows[#rows + 1] = split_md_cells(line)
-  end
-  local ncols = 0
-  for _, r in ipairs(rows) do
-    ncols = math.max(ncols, #r)
-  end
-  if ncols == 0 then
-    return raw_lines
-  end
-  local widths = {}
-  for c = 1, ncols do
-    widths[c] = 3
-  end
-  for _, r in ipairs(rows) do
-    if not is_md_sep_row(r) then
-      for c = 1, ncols do
-        widths[c] = math.max(widths[c], disp_w(r[c] or ""))
-      end
-    end
-  end
-  local out = {}
-  for _, r in ipairs(rows) do
-    local parts = {}
-    local sep = is_md_sep_row(r)
-    for c = 1, ncols do
-      local cell = r[c] or ""
-      if sep then
-        parts[c] = format_md_sep(cell == "" and "---" or cell, widths[c])
-      else
-        parts[c] = pad_md_cell(cell, widths[c])
-      end
-    end
-    out[#out + 1] = "| " .. table.concat(parts, " | ") .. " |"
-  end
-  return out
 end
 
 --- Realign the contiguous markdown table ending at `end0` (0-based exclusive).
@@ -953,27 +848,6 @@ function M.append(buf, line)
   schedule_follow(buf)
 end
 
---- Hard-wrap a line to `width` display cells. Soft-wrap still gets a right
---- border via virt_text_repeat_linebreak, but hard-wrap keeps content from
---- painting under the │ and avoids awkward mid-glyph breaks.
-local function wrap_line(text, width, indent)
-  if width < 8 or vim.fn.strdisplaywidth(text) <= width then
-    return { text }
-  end
-  local out = {}
-  local rest = text
-  while vim.fn.strdisplaywidth(rest) > width do
-    local i = vim.fn.strchars(rest)
-    while i > 1 and vim.fn.strdisplaywidth(vim.fn.strcharpart(rest, 0, i)) > width do
-      i = i - 1
-    end
-    out[#out + 1] = vim.fn.strcharpart(rest, 0, i)
-    rest = (indent or "") .. vim.fn.strcharpart(rest, i)
-  end
-  out[#out + 1] = rest
-  return out
-end
-
 --- Max buffer-line width inside a box (inner minus the post-│ space).
 local function content_wrap_width(buf, style)
   local inner = bubble_inner_width(buf, style)
@@ -1030,47 +904,6 @@ local function line_count(buf)
   return vim.api.nvim_buf_line_count(buf)
 end
 
-local function short_name(name)
-  name = tostring(name or "?")
-  return name:gsub("^nvim_", "")
-end
-
---- Cap a rendered block, keeping the head and counting what was dropped
-local function cap_lines(lines, max)
-  if #lines <= max then
-    return lines
-  end
-  local out = {}
-  for i = 1, max - 1 do
-    out[i] = lines[i]
-  end
-  out[max] = string.format("… +%d lines", #lines - max + 1)
-  return out
-end
-
---- Collapsed tool box: header + a few body lines; expand via za / <CR>.
-local TOOL_FULL_CAP = 80
-local TOOL_COLLAPSE_BODY = 3
-local TOOL_COLLAPSE_ERR_BODY = 6
-
-local function collapse_tool_lines(full, expanded, has_err)
-  full = full or {}
-  if expanded or #full <= 1 then
-    return full
-  end
-  local body_keep = has_err and TOOL_COLLAPSE_ERR_BODY or TOOL_COLLAPSE_BODY
-  local keep = math.min(1 + body_keep, #full)
-  if keep >= #full then
-    return full
-  end
-  local out = {}
-  for i = 1, keep do
-    out[i] = full[i]
-  end
-  out[#out + 1] = string.format("  … +%d lines  za expand", #full - keep)
-  return out
-end
-
 local function attach_tool_payload(buf, full, expanded, has_err)
   if tool_box and tool_box.buf == buf and tool_box.box then
     local b = tool_box.box
@@ -1078,52 +911,6 @@ local function attach_tool_payload(buf, full, expanded, has_err)
     b.tool_expanded = expanded and true or false
     b.tool_has_err = has_err and true or false
   end
-end
-
---- Guard rail against a tool argument carrying a whole file (write/edit)
-local MAX_ARG_CHARS = 2000
-
-local function clip(text)
-  if vim.fn.strchars(text) <= MAX_ARG_CHARS then
-    return text
-  end
-  return vim.fn.strcharpart(text, 0, MAX_ARG_CHARS) .. " …"
-end
-
---- The arguments a tool was actually called with. This is the part that used to
---- be missing: only a one-line path/command summary was rendered before.
-local function tool_arg_lines(args)
-  local out = {}
-  if type(args) ~= "table" then
-    return out
-  end
-  local function push(prefix, value)
-    local parts = vim.split(clip(tostring(value)), "\n", { plain = true })
-    out[#out + 1] = prefix .. parts[1]
-    for i = 2, #parts do
-      out[#out + 1] = "  " .. parts[i]
-    end
-  end
-  if args.command ~= nil then
-    push("$ ", args.command)
-  end
-  local keys = {}
-  for k in pairs(args) do
-    if k ~= "command" then
-      keys[#keys + 1] = k
-    end
-  end
-  table.sort(keys)
-  for _, k in ipairs(keys) do
-    local v = args[k]
-    if type(v) == "table" then
-      v = vim.json.encode(v)
-    end
-    if v ~= nil and tostring(v) ~= "" then
-      push(tostring(k) .. ": ", v)
-    end
-  end
-  return cap_lines(out, 12)
 end
 
 --- Text out of a tool_execution_end result payload
@@ -1154,32 +941,9 @@ end
 
 --- One tool call as a block: header line, argument lines, optional error text
 local function tool_block(buf, name, args, ok, count, err)
-  local mark = ok == nil and "…" or (ok and "✓" or "✗")
-  local head = string.format("⚙ %s %s", short_name(name), mark)
-  if count and count > 1 then
-    head = head .. string.format(" ×%d", count)
-  end
-  local raw = { head }
-  for _, l in ipairs(tool_arg_lines(args)) do
-    raw[#raw + 1] = "  " .. l
-  end
-  if err and err ~= "" then
-    for _, l in ipairs(cap_lines(vim.split(err, "\n", { plain = true }), 6)) do
-      raw[#raw + 1] = "  ! " .. l
-    end
-  end
-  -- keep content inside the inner area (after the post-│ space); extra margin
-  -- for emoji/CJK terminals that draw wider than strdisplaywidth reports
   local inner = bubble_inner_width(buf, STYLES.tool)
   local width = math.max(20, inner - 1 - 2)
-  local lines = {}
-  for _, l in ipairs(raw) do
-    for _, w in ipairs(wrap_line(l, width, "  ")) do
-      lines[#lines + 1] = w
-    end
-  end
-  -- wrapping can multiply lines; keep a high cap for expand, collapse for display
-  return cap_lines(lines, TOOL_FULL_CAP)
+  return Rtools.tool_block_lines(name, args, ok, count, err, width)
 end
 
 local function append_tool_lines(buf, lines)
