@@ -7,6 +7,8 @@ local pending = {}
 local last_tool = nil
 local streaming_assistant = false
 local streaming_thinking = false
+--- After a streamed "\n", the next delta starts a new buffer line (do not merge).
+local stream_at_bol = false
 local follow_scheduled = false
 --- Cleared only by gg; content updates always force-follow while true
 local stick_bottom = true
@@ -65,6 +67,22 @@ local STYLES = {
     border_hl = "PiThinkBorder",
     body_hl = "PiThinkBubble",
   },
+  -- Final answer: same ▌│ chrome widths as toolcall so body text shares columns.
+  -- Empty label → top rule with no "assistant" chip (user asked for inset, not a tag).
+  assistant = {
+    label = "",
+    label_hl = "PiAssistant",
+    tl = "╭",
+    tr = "╮",
+    bl = "╰",
+    br = "╯",
+    h = "─",
+    v = "│",
+    bar = "▌",
+    bar_hl = "PiAsstBar",
+    border_hl = "PiAsstBorder",
+    body_hl = "PiAsstBubble",
+  },
 }
 
 --- bufnr → { { buf, ns, start0, end0, style }, ... } end0 exclusive
@@ -72,6 +90,7 @@ local bubbles = {}
 --- boxes still being streamed: { buf, box }
 local tool_box = nil
 local think_box = nil
+local asst_box = nil
 local box_seq = 0
 local bubble_resize_autocmd ---@type integer|nil
 
@@ -168,27 +187,18 @@ local function bubble_inner_width(buf, style)
   return math.max(10, avail - bar_w - 2 * side_w), avail
 end
 
---- Inset matching boxed body text (after `▌│ `). Final assistant answers use the
---- same left/right gutters so they line up with text inside role boxes.
-local function text_gutter(style)
-  local bar_w, side_w = style_chrome(style or STYLES.user)
-  return bar_w + side_w + 1
-end
-
-local function assistant_pad()
-  return string.rep(" ", text_gutter(STYLES.user))
-end
-
---- Full line width including left pad (leave a right gutter like the box │).
-local function assistant_line_width(buf)
-  local g = text_gutter(STYLES.user)
-  return math.max(8, bubble_avail(buf) - g)
-end
-
 --- Markdown table row (optional leading gutter spaces).
+--- Require ≥2 pipes so a lone "|" mid-stream is not treated as a finished row.
 local function is_md_table_row(s)
   local t = vim.trim(s or "")
-  return t:find("^|") ~= nil and t:find("|$") ~= nil
+  if t == "" or t:sub(1, 1) ~= "|" or t:sub(-1) ~= "|" then
+    return false
+  end
+  local n = 0
+  for _ in t:gmatch("|") do
+    n = n + 1
+  end
+  return n >= 2
 end
 
 local function split_md_cells(s)
@@ -276,6 +286,14 @@ local function realign_md_table_at(buf, end0, pad)
   local pad_w = disp_w(pad)
   local n = vim.api.nvim_buf_line_count(buf)
   end0 = math.min(end0 or n, n)
+  -- skip trailing blanks so a final "\n" does not hide the table
+  while end0 > 0 do
+    local line = vim.api.nvim_buf_get_lines(buf, end0 - 1, end0, false)[1] or ""
+    if vim.trim(line) ~= "" then
+      break
+    end
+    end0 = end0 - 1
+  end
   if end0 <= 0 then
     return
   end
@@ -293,14 +311,21 @@ local function realign_md_table_at(buf, end0, pad)
   end
   local raw = vim.api.nvim_buf_get_lines(buf, start0, end0, false)
   local stripped = {}
+  local has_sep = false
   for _, line in ipairs(raw) do
     local body = line
-    if pad_w > 0 and disp_w(line) >= pad_w and line:sub(1, #pad) == pad then
+    if pad_w > 0 and #pad > 0 and line:sub(1, #pad) == pad then
       body = line:sub(#pad + 1)
     else
       body = vim.trim(line)
     end
     stripped[#stripped + 1] = body
+    if is_md_sep_row(split_md_cells(body)) then
+      has_sep = true
+    end
+  end
+  if not has_sep then
+    return
   end
   local aligned = align_md_table(stripped)
   local out = {}
@@ -426,6 +451,10 @@ local function close_thinking_box()
   think_box = nil
 end
 
+local function close_assistant_box()
+  asst_box = nil
+end
+
 --- Register a finished range and paint it
 local function commit_box(buf, style, start0, end0)
   if not buf or not vim.api.nvim_buf_is_valid(buf) or end0 <= start0 then
@@ -466,6 +495,7 @@ local function note_tool_lines(buf, first1, last1)
   end
   last1 = last1 or first1
   close_thinking_box()
+  close_assistant_box()
   local s0, e0 = first1 - 1, last1
   if tool_box and tool_box.buf == buf then
     local b = tool_box.box
@@ -568,6 +598,9 @@ function M.setup(buf)
     vim.api.nvim_set_hl(0, "PiThinkBubble", { bg = 0x20202c })
     vim.api.nvim_set_hl(0, "PiThinkBorder", { fg = 0x565f89, bg = 0x20202c })
     vim.api.nvim_set_hl(0, "PiAssistant", { fg = 0x9ece6a, bold = true })
+    vim.api.nvim_set_hl(0, "PiAsstBar", { fg = 0x9ece6a })
+    vim.api.nvim_set_hl(0, "PiAsstBubble", { bg = 0x1f2a1f, fg = 0xc0caf5 })
+    vim.api.nvim_set_hl(0, "PiAsstBorder", { fg = 0x9ece6a, bg = 0x1f2a1f })
     vim.api.nvim_set_hl(0, "PiThinking", { fg = 0xa9b1d6, italic = true })
     vim.api.nvim_set_hl(0, "PiAgent", { fg = 0xbb9af7, bold = true })
     vim.api.nvim_set_hl(0, "PiError", { fg = 0xf7768e, bold = true })
@@ -627,6 +660,7 @@ function M.reset(buf)
   in_thinking_body = false
   tool_box = nil
   think_box = nil
+  asst_box = nil
   if buf then
     history_by_buf[buf] = nil
   end
@@ -923,6 +957,7 @@ function M.append_user(buf, text)
   in_thinking_body = false
   close_tool_batch()
   close_thinking_box()
+  close_assistant_box()
   M.append(buf, "")
   local start0 = vim.api.nvim_buf_line_count(buf)
   for line in (tostring(text) .. "\n"):gmatch("(.-)\n") do
@@ -940,6 +975,7 @@ function M.append_thinking(buf, text)
   in_thinking_body = true
   close_tool_batch()
   close_thinking_box()
+  close_assistant_box()
   M.append(buf, "")
   local start0 = vim.api.nvim_buf_line_count(buf)
   for line in (tostring(text) .. "\n"):gmatch("(.-)\n") do
@@ -1183,8 +1219,9 @@ local function ensure_assistant_header(buf)
   last_tool = nil
   in_you_body = false
   in_thinking_body = false
-  -- blank separator only (no "assistant" / "agent" label)
+  -- blank separator outside the bubble; box chrome owns the inset
   M.append(buf, "")
+  asst_box = { buf = buf, box = open_box(buf, STYLES.assistant) }
 end
 
 local function ensure_thinking_header(buf)
@@ -1197,6 +1234,7 @@ local function ensure_thinking_header(buf)
   in_you_body = false
   in_thinking_body = true
   close_tool_batch()
+  close_assistant_box()
   M.append(buf, "")
   think_box = { buf = buf, box = open_box(buf, STYLES.thinking) }
 end
@@ -1205,67 +1243,70 @@ local function is_structural_line(s)
   return s:match("^—") or s:match("^⚙") or s:match("^###") or s:match("^# pi")
 end
 
---- Append one assistant answer line, indented to match boxed body text.
+--- Append one assistant answer line inside the answer box (no space pad —
+--- virt_text `▌│ ` supplies the same left edge as toolcall body text).
 local function append_assistant_line(buf, text)
   if text == "" then
     M.append(buf, "")
     return
   end
-  local pad = assistant_pad()
   -- never hard-wrap table rows — that breaks column alignment
   if is_md_table_row(text) then
-    M.append(buf, pad .. text)
+    M.append(buf, text)
     with_write(buf, function()
-      realign_md_table_at(buf, vim.api.nvim_buf_line_count(buf), pad)
+      realign_md_table_at(buf, vim.api.nvim_buf_line_count(buf), "")
     end)
     return
   end
-  local width = assistant_line_width(buf)
-  for _, w in ipairs(wrap_line(pad .. text, width, pad)) do
-    M.append(buf, w)
-  end
+  append_wrapped_line(buf, text, STYLES.assistant)
 end
 
 local function append_text_delta(buf, delta)
   delta = tostring(delta):gsub("\r\n", "\n"):gsub("\r", "\n")
-  local parts = vim.split(delta, "\n", { plain = true })
   local start0 = line_count(buf)
-  -- if appending after structural line, new lines start at start0; else may extend last line
   local extended_last = false
   local is_think = streaming_thinking
   local is_asst = streaming_assistant and not is_think
-  local pad = is_asst and assistant_pad() or ""
+  local pad = ""
   local wrap_w
   if is_think then
     wrap_w = content_wrap_width(buf, STYLES.thinking)
   elseif is_asst then
-    wrap_w = assistant_line_width(buf)
+    wrap_w = content_wrap_width(buf, STYLES.assistant)
   end
-  local saw_table = false
+
+  -- Split into chunks that preserve "\n" as a bol flag instead of vim.split's
+  -- trailing "" artifact (which used to insert blank lines between table rows).
+  local chunks = {}
+  do
+    local rest = delta
+    while true do
+      local idx = rest:find("\n", 1, true)
+      if not idx then
+        if rest ~= "" then
+          chunks[#chunks + 1] = { text = rest, nl = false }
+        end
+        break
+      end
+      chunks[#chunks + 1] = { text = rest:sub(1, idx - 1), nl = true }
+      rest = rest:sub(idx + 1)
+    end
+  end
+
   with_write(buf, function()
     local n = line_count(buf)
     local last = vim.api.nvim_buf_get_lines(buf, n - 1, n, false)[1] or ""
 
-    local function push_line(text)
-      n = line_count(buf)
-      last = vim.api.nvim_buf_get_lines(buf, n - 1, n, false)[1] or ""
-      if text == "" and last == "" then
-        return
-      end
+    local function write_new(text)
       if text == "" then
-        if is_asst and is_md_table_row(last) then
-          realign_md_table_at(buf, n, pad)
-        end
         vim.api.nvim_buf_set_lines(buf, -1, -1, false, { "" })
         return
       end
-      local table_row = is_asst and is_md_table_row(text)
-      if table_row then
-        saw_table = true
-        vim.api.nvim_buf_set_lines(buf, -1, -1, false, { pad .. text })
+      if is_asst and is_md_table_row(text) then
+        vim.api.nvim_buf_set_lines(buf, -1, -1, false, { text })
         return
       end
-      local line = pad ~= "" and (pad .. text) or text
+      local line = text
       if wrap_w then
         for _, w in ipairs(wrap_line(line, wrap_w, pad)) do
           vim.api.nvim_buf_set_lines(buf, -1, -1, false, { w })
@@ -1275,33 +1316,49 @@ local function append_text_delta(buf, delta)
       end
     end
 
-    if is_structural_line(last) or last == "" then
-      push_line(parts[1] or "")
-    else
-      -- extending last line: if it's becoming/keeping a table row, don't wrap
+    local function write_merge(text)
+      n = line_count(buf)
+      last = vim.api.nvim_buf_get_lines(buf, n - 1, n, false)[1] or ""
       extended_last = true
-      local merged = last .. (parts[1] or "")
+      local merged = last .. text
       local body = merged
-      if pad ~= "" and merged:sub(1, #pad) == pad then
-        body = merged:sub(#pad + 1)
-      end
       if is_asst and is_md_table_row(body) then
-        saw_table = true
-        vim.api.nvim_buf_set_lines(buf, n - 1, n, false, { pad .. vim.trim(body) })
+        vim.api.nvim_buf_set_lines(buf, n - 1, n, false, { body:gsub("^%s+", "") })
       elseif wrap_w and vim.fn.strdisplaywidth(merged) > wrap_w then
-        local wrapped = wrap_line(merged, wrap_w, pad)
-        vim.api.nvim_buf_set_lines(buf, n - 1, n, false, wrapped)
+        vim.api.nvim_buf_set_lines(buf, n - 1, n, false, wrap_line(merged, wrap_w, pad))
       else
         vim.api.nvim_buf_set_lines(buf, n - 1, n, false, { merged })
       end
     end
 
-    for i = 2, #parts do
-      push_line(parts[i])
-    end
-
-    if saw_table then
-      realign_md_table_at(buf, line_count(buf), pad)
+    for _, c in ipairs(chunks) do
+      n = line_count(buf)
+      last = vim.api.nvim_buf_get_lines(buf, n - 1, n, false)[1] or ""
+      if c.text ~= "" then
+        if stream_at_bol or is_structural_line(last) or last == "" then
+          -- non-table text after a table: realign the table above first
+          if is_asst and stream_at_bol and not is_md_table_row(c.text) then
+            realign_md_table_at(buf, line_count(buf), pad)
+          end
+          write_new(c.text)
+        else
+          write_merge(c.text)
+        end
+        stream_at_bol = false
+      elseif c.nl and stream_at_bol then
+        -- second newline in a row → blank paragraph; table ended
+        if is_asst then
+          realign_md_table_at(buf, line_count(buf), pad)
+        end
+        write_new("")
+      end
+      if c.nl then
+        stream_at_bol = true
+        -- Row finished: safe to realign (next chars start a new line).
+        if is_asst then
+          realign_md_table_at(buf, line_count(buf), pad)
+        end
+      end
     end
   end)
   local end0 = line_count(buf)
@@ -1311,6 +1368,9 @@ local function append_text_delta(buf, delta)
   end
   decorate_range(buf, from, end0 - from)
   last_tool = nil
+  if is_asst and asst_box and asst_box.buf == buf then
+    grow_box(asst_box.box)
+  end
   schedule_follow(buf)
 end
 
@@ -1339,10 +1399,12 @@ function M.on_event(buf, ev)
   if ev.type == "agent_start" then
     streaming_assistant = false
     streaming_thinking = false
+    stream_at_bol = false
     in_thinking_body = false
     in_you_body = false
     close_tool_batch()
     close_thinking_box()
+    close_assistant_box()
     pending = {}
     stick_bottom = true
     M.append(buf, "")
@@ -1355,6 +1417,7 @@ function M.on_event(buf, ev)
     in_thinking_body = false
     close_tool_batch()
     close_thinking_box()
+    close_assistant_box()
     last_tool = nil
     -- Surface API / model failures (e.g. 401) that produced no text_delta
     local msgs = ev.messages
@@ -1414,6 +1477,7 @@ function M.on_event(buf, ev)
       local err = a.errorMessage or a.message or a.error or "assistant error"
       in_you_body = false
       in_thinking_body = false
+      close_assistant_box()
       M.append(buf, "")
       local start0 = vim.api.nvim_buf_line_count(buf)
       M.append(buf, tostring(err))
@@ -1432,6 +1496,7 @@ function M.on_event(buf, ev)
       streaming_assistant = false
       streaming_thinking = false
       in_thinking_body = false
+      close_assistant_box()
       schedule_follow(buf)
     end
   end
@@ -1578,9 +1643,11 @@ local function paint_messages(buf, messages)
           in_you_body = false
           in_thinking_body = false
           M.append(buf, "")
+          local start0 = vim.api.nvim_buf_line_count(buf)
           for line in (parts.text .. "\n"):gmatch("(.-)\n") do
             append_assistant_line(buf, line)
           end
+          commit_box(buf, STYLES.assistant, start0, vim.api.nvim_buf_line_count(buf))
         end
         if parts.tool_calls and #parts.tool_calls > 0 then
           for _, call in ipairs(parts.tool_calls) do
@@ -1614,6 +1681,10 @@ local function shift_bubbles(buf, at, delta)
   if think_box and think_box.buf == buf and think_box.box.start0 >= at then
     think_box.box.start0 = think_box.box.start0 + delta
     think_box.box.end0 = think_box.box.end0 + delta
+  end
+  if asst_box and asst_box.buf == buf and asst_box.box.start0 >= at then
+    asst_box.box.start0 = asst_box.box.start0 + delta
+    asst_box.box.end0 = asst_box.box.end0 + delta
   end
 end
 
@@ -1654,6 +1725,7 @@ function M.load_older(buf, win)
     in_thinking_body = in_thinking_body,
     tool_box = tool_box,
     think_box = think_box,
+    asst_box = asst_box,
   }
   local tmp = vim.api.nvim_create_buf(false, true)
   suspend_follow = true
@@ -1673,6 +1745,7 @@ function M.load_older(buf, win)
   in_thinking_body = saved.in_thinking_body
   tool_box = saved.tool_box
   think_box = saved.think_box
+  asst_box = saved.asst_box
   suspend_follow = false
   if not painted_ok then
     history_loading = false

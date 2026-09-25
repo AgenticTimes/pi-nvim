@@ -119,17 +119,16 @@ render.on_event(b, {
   assistantMessageEvent = { type = "text_delta", delta = "\n\nmore" },
 })
 lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
--- find last assistant block (indented to match boxed body)
+-- find last assistant block (box virt_text insets; buffer text has no space pad)
 local saw_title, saw_item, saw_more = false, false, false
 for _, l in ipairs(lines) do
-  if vim.trim(l) == "## Title" then
+  if l == "## Title" then
     saw_title = true
-    h.assert_truthy(l:match("^%s+## Title"), "title indented")
   end
-  if vim.trim(l) == "- item1" then
+  if l == "- item1" then
     saw_item = true
   end
-  if vim.trim(l) == "more" then
+  if l == "more" then
     saw_more = true
   end
 end
@@ -237,10 +236,31 @@ for _, l in ipairs(lines) do
     break
   end
 end
-h.assert_truthy(answer_line and answer_line:match("^%s+final answer"), "answer indented like box body")
-h.assert_eq(answer_line:match("^(%s*)"), "   ", "answer left gutter matches ▌│ ")
+h.assert_eq(answer_line, "final answer", "answer buffer text has no space pad (box virt_text insets)")
+-- answer sits in an assistant box with the same ▌│ chrome as toolcall
+local has_asst_box = false
+local ns_list = vim.api.nvim_get_namespaces()
+for name, ns in pairs(ns_list) do
+  if tostring(name):match("^pi_box_") then
+    local marks = vim.api.nvim_buf_get_extmarks(b, ns, 0, -1, { details = true })
+    for _, m in ipairs(marks) do
+      local d = m[4]
+      if d and d.virt_text then
+        for _, chunk in ipairs(d.virt_text) do
+          if chunk[2] == "PiAsstBar" or chunk[2] == "PiAsstBorder" then
+            has_asst_box = true
+          end
+        end
+      end
+      if d and (d.line_hl_group == "PiAsstBubble" or d.hl_group == "PiAsstBubble") then
+        has_asst_box = true
+      end
+    end
+  end
+end
+h.assert_truthy(has_asst_box, "answer boxed with left chrome")
 
--- markdown tables pad columns to display width (CJK-safe) and keep the gutter
+-- markdown tables pad columns to display width (CJK-safe); box supplies the gutter
 render.on_event(b, { type = "agent_start" })
 render.on_event(b, {
   type = "message_update",
@@ -260,7 +280,7 @@ local tw = vim.fn.strdisplaywidth(table_lines[1])
 for i = 2, #table_lines do
   h.assert_eq(vim.fn.strdisplaywidth(table_lines[i]), tw, "table row widths match: " .. table_lines[i])
 end
-h.assert_eq(table_lines[1]:match("^(%s*)"), "   ", "table keeps left gutter")
+h.assert_eq(table_lines[1]:match("^(%s*)"), "", "table has no space pad (box insets)")
 h.assert_truthy(table_lines[1]:find("列1", 1, true), "header cell kept")
 
 -- thinking lines have PiThinking mark
