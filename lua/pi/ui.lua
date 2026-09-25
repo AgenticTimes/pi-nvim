@@ -715,10 +715,16 @@ local function map_ui_keys()
   local opts_c = { buffer = chat, nowait = true, silent = true }
   local opts_i = { buffer = input, nowait = true, silent = true }
 
-  -- Enter on chat → open ask popup
+  -- Enter on chat → expand/collapse tool under cursor, else open ask popup
   vim.keymap.set("n", "<CR>", function()
+    if require("pi.render").toggle_tool_at_cursor(chat, wins.chat) then
+      return
+    end
     M.open_input()
-  end, vim.tbl_extend("force", opts_c, { desc = "pi: open ask" }))
+  end, vim.tbl_extend("force", opts_c, { desc = "pi: expand tool / open ask" }))
+  vim.keymap.set("n", "za", function()
+    require("pi.render").toggle_tool_at_cursor(chat, wins.chat)
+  end, vim.tbl_extend("force", opts_c, { desc = "pi: toggle tool expand" }))
 
   local tab = k.focus_cycle or "<Tab>"
   vim.keymap.set("n", tab, function()

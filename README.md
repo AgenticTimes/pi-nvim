@@ -49,7 +49,7 @@ On first open (`,ai`), if `resume_last = true` (default), switches to the newest
 
 In review buffers: `a` accept, `r` reject, `]f`/`[f` next/prev.
 
-In chat: `<CR>` open ask popup · `]]`/`[[` next/prev message · `q` close · `<Tab>` toggle ask.
+In chat: `<CR>` open ask popup (or expand/collapse tool under cursor) · `za` toggle tool expand · `]]`/`[[` next/prev message · `q` close · `<Tab>` toggle ask.
 
 In ask popup: `<CR>` submit · `<C-j>` newline · `<Esc>` close popup · `<C-c>` abort · `<Up>`/`<Down>` history · empty `/` slash · `@` mention · empty `#` skills.
 

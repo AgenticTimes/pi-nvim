@@ -1048,6 +1048,38 @@ local function cap_lines(lines, max)
   return out
 end
 
+--- Collapsed tool box: header + a few body lines; expand via za / <CR>.
+local TOOL_FULL_CAP = 80
+local TOOL_COLLAPSE_BODY = 3
+local TOOL_COLLAPSE_ERR_BODY = 6
+
+local function collapse_tool_lines(full, expanded, has_err)
+  full = full or {}
+  if expanded or #full <= 1 then
+    return full
+  end
+  local body_keep = has_err and TOOL_COLLAPSE_ERR_BODY or TOOL_COLLAPSE_BODY
+  local keep = math.min(1 + body_keep, #full)
+  if keep >= #full then
+    return full
+  end
+  local out = {}
+  for i = 1, keep do
+    out[i] = full[i]
+  end
+  out[#out + 1] = string.format("  … +%d lines  za expand", #full - keep)
+  return out
+end
+
+local function attach_tool_payload(buf, full, expanded, has_err)
+  if tool_box and tool_box.buf == buf and tool_box.box then
+    local b = tool_box.box
+    b.tool_full = full
+    b.tool_expanded = expanded and true or false
+    b.tool_has_err = has_err and true or false
+  end
+end
+
 --- Guard rail against a tool argument carrying a whole file (write/edit)
 local MAX_ARG_CHARS = 2000
 
@@ -1146,8 +1178,8 @@ local function tool_block(buf, name, args, ok, count, err)
       lines[#lines + 1] = w
     end
   end
-  -- wrapping can multiply lines: keep one tool call bounded on screen
-  return cap_lines(lines, 24)
+  -- wrapping can multiply lines; keep a high cap for expand, collapse for display
+  return cap_lines(lines, TOOL_FULL_CAP)
 end
 
 local function append_tool_lines(buf, lines)
@@ -1174,8 +1206,9 @@ local function mark_error_lines(buf, first, n)
 end
 
 local function upsert_tool_end(buf, name, args, ok, err)
-  local lines = tool_block(buf, name, args, ok, 1, err)
-  local key = table.concat(lines, "\n")
+  local has_err = err and err ~= ""
+  local full = tool_block(buf, name, args, ok, 1, err)
+  local key = table.concat(full, "\n")
   -- identical consecutive calls collapse onto the first block (×N)
   if
     ok
@@ -1186,19 +1219,33 @@ local function upsert_tool_end(buf, name, args, ok, err)
     and last_tool.start_line + last_tool.n - 1 <= line_count(buf)
   then
     last_tool.count = last_tool.count + 1
-    local updated = tool_block(buf, name, args, ok, last_tool.count, err)
+    full = tool_block(buf, name, args, ok, last_tool.count, err)
+    local expanded = last_tool.expanded and true or false
+    local display = collapse_tool_lines(full, expanded, false)
     with_write(buf, function()
-      vim.api.nvim_buf_set_lines(buf, last_tool.start_line - 1, last_tool.start_line - 1 + last_tool.n, false, updated)
+      vim.api.nvim_buf_set_lines(buf, last_tool.start_line - 1, last_tool.start_line - 1 + last_tool.n, false, display)
     end)
-    last_tool.n = #updated
-    note_tool_lines(buf, last_tool.start_line, last_tool.start_line + #updated - 1)
+    last_tool.n = #display
+    last_tool.full = full
+    note_tool_lines(buf, last_tool.start_line, last_tool.start_line + #display - 1)
+    attach_tool_payload(buf, full, expanded, false)
     schedule_follow(buf)
     return
   end
-  local first = append_tool_lines(buf, lines)
-  last_tool = { key = key, ok = ok, count = 1, start_line = first, n = #lines }
-  if err and err ~= "" then
-    mark_error_lines(buf, first, #lines)
+  local display = collapse_tool_lines(full, false, has_err)
+  local first = append_tool_lines(buf, display)
+  last_tool = {
+    key = key,
+    ok = ok,
+    count = 1,
+    start_line = first,
+    n = #display,
+    full = full,
+    expanded = false,
+  }
+  attach_tool_payload(buf, full, false, has_err)
+  if has_err then
+    mark_error_lines(buf, first, #display)
   end
 end
 
@@ -1244,6 +1291,80 @@ function M.jump_message(buf, win, dir)
       end
     end
   end
+end
+
+--- Toggle collapsed/expanded tool box under the cursor. Returns true if handled.
+function M.toggle_tool_at_cursor(buf, win)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return false
+  end
+  win = win or 0
+  if type(win) ~= "number" or not vim.api.nvim_win_is_valid(win) then
+    return false
+  end
+  local row = vim.api.nvim_win_get_cursor(win)[1] - 1
+  local target
+  for _, b in ipairs(bubbles[buf] or {}) do
+    if
+      b.style
+      and b.style.bar_hl == "PiToolBar"
+      and b.tool_full
+      and row >= b.start0
+      and row < b.end0
+    then
+      target = b
+      break
+    end
+  end
+  if not target then
+    return false
+  end
+  local full = target.tool_full
+  local preview = collapse_tool_lines(full, false, target.tool_has_err)
+  if #preview >= #full then
+    return false
+  end
+  local expanded = not target.tool_expanded
+  local display = collapse_tool_lines(full, expanded, target.tool_has_err)
+  local old_end = target.end0
+  with_write(buf, function()
+    vim.api.nvim_buf_set_lines(buf, target.start0, target.end0, false, display)
+  end)
+  local new_n = #display
+  local delta = new_n - (old_end - target.start0)
+  target.tool_expanded = expanded
+  target.end0 = target.start0 + new_n
+  if delta ~= 0 then
+    for _, b in ipairs(bubbles[buf] or {}) do
+      if b ~= target and b.start0 >= old_end then
+        b.start0 = b.start0 + delta
+        b.end0 = b.end0 + delta
+      end
+    end
+    if think_box and think_box.buf == buf and think_box.box.start0 >= old_end then
+      think_box.box.start0 = think_box.box.start0 + delta
+      think_box.box.end0 = think_box.box.end0 + delta
+    end
+    if asst_box and asst_box.buf == buf and asst_box.box.start0 >= old_end then
+      asst_box.box.start0 = asst_box.box.start0 + delta
+      asst_box.box.end0 = asst_box.box.end0 + delta
+    end
+    if last_tool and last_tool.start_line then
+      local last_start0 = last_tool.start_line - 1
+      if last_start0 == target.start0 then
+        last_tool.n = new_n
+        last_tool.expanded = expanded
+        last_tool.full = full
+      elseif last_start0 >= old_end then
+        last_tool.start_line = last_tool.start_line + delta
+      end
+    end
+  end
+  paint_box(target)
+  if target.tool_has_err then
+    mark_error_lines(buf, target.start0 + 1, new_n)
+  end
+  return true
 end
 
 local function ensure_assistant_header(buf)
@@ -1692,7 +1813,10 @@ local function paint_messages(buf, messages)
         end
         if parts.tool_calls and #parts.tool_calls > 0 then
           for _, call in ipairs(parts.tool_calls) do
-            append_tool_lines(buf, tool_block(buf, call.name, call.args, nil, 1))
+            local full = tool_block(buf, call.name, call.args, nil, 1)
+            local display = collapse_tool_lines(full, false, false)
+            append_tool_lines(buf, display)
+            attach_tool_payload(buf, full, false, false)
           end
         elseif parts.tools and parts.tools > 0 then
           append_tool_lines(buf, { string.format("⚙ %d tool call(s)", parts.tools) })

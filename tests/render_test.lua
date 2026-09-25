@@ -91,6 +91,56 @@ for _, b in ipairs(vim.api.nvim_buf_get_extmarks(tb, h.last_box_ns(tb), 0, -1, {
 end
 h.assert_eq(tool_boxes, 2, "one top + one bottom rule for the whole batch")
 
+-- long tool args collapse; toggle expands / collapses
+local lb = vim.api.nvim_create_buf(false, true)
+render.setup(lb)
+render.reset(lb)
+local long_cmd = table.concat({
+  "line1",
+  "line2",
+  "line3",
+  "line4",
+  "line5",
+  "line6",
+  "line7",
+}, "\n")
+render.on_event(lb, {
+  type = "tool_execution_start",
+  toolCallId = "long1",
+  toolName = "bash",
+  args = { command = long_cmd },
+})
+render.on_event(lb, {
+  type = "tool_execution_end",
+  toolCallId = "long1",
+  toolName = "bash",
+  isError = false,
+})
+local ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
+h.assert_truthy(ljoin:find("za expand", 1, true), "collapse marker present: " .. ljoin)
+h.assert_false(ljoin:find("line7", 1, true), "tail hidden while collapsed")
+local lwin = vim.api.nvim_open_win(lb, true, {
+  relative = "editor",
+  width = 60,
+  height = 12,
+  row = 1,
+  col = 1,
+  style = "minimal",
+})
+for i, l in ipairs(vim.api.nvim_buf_get_lines(lb, 0, -1, false)) do
+  if l:match("^⚙") then
+    vim.api.nvim_win_set_cursor(lwin, { i, 0 })
+    break
+  end
+end
+h.assert_truthy(render.toggle_tool_at_cursor(lb, lwin), "toggle expands")
+ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
+h.assert_truthy(ljoin:find("line7", 1, true), "tail visible when expanded")
+h.assert_false(ljoin:find("za expand", 1, true), "no marker when expanded")
+h.assert_truthy(render.toggle_tool_at_cursor(lb, lwin), "toggle collapses")
+ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
+h.assert_truthy(ljoin:find("za expand", 1, true), "marker restored")
+pcall(vim.api.nvim_win_close, lwin, true)
 
 -- assistant text has no role header (OpenCode-style)
 render.on_event(b, { type = "agent_start" })
