@@ -27,7 +27,7 @@ local function first_hunk_row(after, before)
   return nil
 end
 
---- One hint above the first changed hunk (not every hunk).
+--- One boxed hint above the first changed hunk (not every hunk).
 local function paint_hint(buf, before_lines)
   clear_hint()
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
@@ -38,12 +38,26 @@ local function paint_hint(buf, before_lines)
   if not row then
     return
   end
+  -- Distinct bg so amber text does not melt into DiffAdd / Normal
+  if vim.fn.hlexists("PiReviewHint") == 0 then
+    vim.api.nvim_set_hl(0, "PiReviewHint", { fg = 0xe0af68, bg = 0x2a2418, bold = true })
+    vim.api.nvim_set_hl(0, "PiReviewHintBorder", { fg = 0xe0af68, bg = 0x2a2418 })
+  end
   if vim.fn.hlexists("PiReview") == 0 then
     vim.api.nvim_set_hl(0, "PiReview", { fg = 0xe0af68, bold = true })
   end
-  local text = " a/r file · A/R all · ah/rh hunk · ]h/[h · q close "
+  local label = " a/r file · A/R all · ah/rh hunk · ]h/[h · q close "
+  local w = vim.fn.strdisplaywidth(label)
+  local bar = string.rep("─", w)
+  local top = "╭" .. bar .. "╮"
+  local mid = "│" .. label .. "│"
+  local bot = "╰" .. bar .. "╯"
   pcall(vim.api.nvim_buf_set_extmark, buf, hint_ns, row - 1, 0, {
-    virt_lines = { { { text, "PiReview" } } },
+    virt_lines = {
+      { { top, "PiReviewHintBorder" } },
+      { { mid, "PiReviewHint" } },
+      { { bot, "PiReviewHintBorder" } },
+    },
     virt_lines_above = true,
     priority = 200,
   })

@@ -45,10 +45,11 @@ for name, id in pairs(vim.api.nvim_get_namespaces()) do
         for _, chunk in ipairs(d.virt_lines[1] or {}) do
           s = s .. tostring(chunk[1])
         end
-        h.assert_truthy(s:find("A/R", 1, true) or s:find("all", 1, true), "hint mentions accept-all: " .. s)
-        h.assert_truthy(s:find("a/r", 1, true) or s:find("file", 1, true), "hint mentions file keys")
+        h.assert_truthy(s:find("╭", 1, true) or s:find("A/R", 1, true), "boxed hint: " .. s)
+        h.assert_truthy(s:find("A/R", 1, true) or s:find("all", 1, true), "hint mentions accept-all")
         found_hint = true
         h.assert_eq(m[2], 1, "hint above first changed row (0-based line 1)")
+        h.assert_eq(#(d.virt_lines or {}), 3, "box is 3 virt rows")
       end
     end
   end
