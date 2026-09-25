@@ -42,4 +42,14 @@ review.accept()
 h.assert_eq(#session.touched(), 0, "empty after accept")
 local after = vim.api.nvim_buf_get_lines(b2, 0, -1, false)
 h.assert_eq(after[2], before_accept[2], "after kept")
+-- no "No pending diffs" scratch left in a window
+local empty_scratch = false
+for _, w in ipairs(vim.api.nvim_list_wins()) do
+  local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(w), 0, 1, false)
+  if lines[1] == "No pending diffs." then
+    empty_scratch = true
+  end
+end
+h.assert_false(empty_scratch, "review chrome closed without empty scratch")
+h.assert_eq(vim.api.nvim_win_get_buf(0), b2, "stays on accepted file")
 require("pi.config").opts.write_on_accept = true

@@ -15,6 +15,28 @@ local function close_diff()
   before_win = nil
 end
 
+--- Tear down review chrome (before split + pending list). Keep code_win on prefer_buf when given.
+function M.close(prefer_buf)
+  close_diff()
+  if list_win and vim.api.nvim_win_is_valid(list_win) then
+    pcall(vim.api.nvim_win_close, list_win, true)
+  end
+  list_win = nil
+  file_idx = 0
+  if code_win and vim.api.nvim_win_is_valid(code_win) then
+    pcall(vim.api.nvim_set_option_value, "winbar", "", { win = code_win })
+    if prefer_buf and vim.api.nvim_buf_is_valid(prefer_buf) then
+      pcall(vim.api.nvim_win_set_buf, code_win, prefer_buf)
+      pcall(vim.api.nvim_set_current_win, code_win)
+    end
+  end
+end
+
+--- Queue empty: close review UI instead of a "No pending diffs" scratch that needs :q.
+local function finish_empty(prefer_buf)
+  M.close(prefer_buf)
+end
+
 local function redraw_list()
   if not list_buf or not vim.api.nvim_buf_is_valid(list_buf) then
     return
@@ -85,24 +107,17 @@ local function map_keys(bufnr)
   vim.keymap.set("n", "[h", function()
     M.next_hunk(-1)
   end, opts)
-end
-
-local function show_empty()
-  close_diff()
-  file_idx = 0
-  if code_win and vim.api.nvim_win_is_valid(code_win) then
-    local empty = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_lines(empty, 0, -1, false, { "No pending diffs." })
-    vim.api.nvim_win_set_buf(code_win, empty)
-  end
-  redraw_list()
+  vim.keymap.set("n", "q", function()
+    M.close()
+  end, opts)
 end
 
 function M.open(idx)
   ensure_list()
   local touched = session.touched()
   if #touched == 0 then
-    show_empty()
+    finish_empty()
+    vim.notify("pi: no pending diffs", vim.log.levels.INFO)
     return
   end
   idx = idx or file_idx
@@ -193,7 +208,7 @@ function M.accept()
   session.remove_touched(file_idx)
   vim.notify("Accepted " .. t.rel, vim.log.levels.INFO)
   if #session.touched() == 0 then
-    show_empty()
+    finish_empty(t.buf)
   else
     M.open(math.min(file_idx, #session.touched()))
   end
@@ -211,7 +226,7 @@ function M.reject()
   session.remove_touched(file_idx)
   vim.notify("Rejected " .. t.rel, vim.log.levels.WARN)
   if #session.touched() == 0 then
-    show_empty()
+    finish_empty(t.buf)
   else
     M.open(math.min(file_idx, #session.touched()))
   end
@@ -347,7 +362,7 @@ function M.reject_hunk()
     session.remove_touched(file_idx)
     vim.notify("Rejected last hunk; removed " .. t.rel, vim.log.levels.WARN)
     if #session.touched() == 0 then
-      show_empty()
+      finish_empty(t.buf)
     else
       M.open(math.min(file_idx, #session.touched()))
     end
@@ -416,14 +431,6 @@ function M.next_hunk(dir)
     vim.api.nvim_set_current_win(code_win)
   end
   return true
-end
-
-function M.close()
-  close_diff()
-  if list_win and vim.api.nvim_win_is_valid(list_win) then
-    pcall(vim.api.nvim_win_close, list_win, true)
-  end
-  list_win = nil
 end
 
 function M.auto_show()
