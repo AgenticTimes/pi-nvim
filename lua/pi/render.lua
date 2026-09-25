@@ -168,6 +168,23 @@ local function bubble_inner_width(buf, style)
   return math.max(10, avail - bar_w - 2 * side_w), avail
 end
 
+--- Inset matching boxed body text (after `▌│ `). Final assistant answers use the
+--- same left/right gutters so they line up with text inside role boxes.
+local function text_gutter(style)
+  local bar_w, side_w = style_chrome(style or STYLES.user)
+  return bar_w + side_w + 1
+end
+
+local function assistant_pad()
+  return string.rep(" ", text_gutter(STYLES.user))
+end
+
+--- Full line width including left pad (leave a right gutter like the box │).
+local function assistant_line_width(buf)
+  local g = text_gutter(STYLES.user)
+  return math.max(8, bubble_avail(buf) - g)
+end
+
 local function push_bubble(buf, b)
   local list = bubbles[buf]
   if not list then
@@ -1062,15 +1079,34 @@ local function is_structural_line(s)
   return s:match("^—") or s:match("^⚙") or s:match("^###") or s:match("^# pi")
 end
 
+--- Append one assistant answer line, indented to match boxed body text.
+local function append_assistant_line(buf, text)
+  if text == "" then
+    M.append(buf, "")
+    return
+  end
+  local pad = assistant_pad()
+  local width = assistant_line_width(buf)
+  for _, w in ipairs(wrap_line(pad .. text, width, pad)) do
+    M.append(buf, w)
+  end
+end
+
 local function append_text_delta(buf, delta)
   delta = tostring(delta):gsub("\r\n", "\n"):gsub("\r", "\n")
   local parts = vim.split(delta, "\n", { plain = true })
   local start0 = line_count(buf)
   -- if appending after structural line, new lines start at start0; else may extend last line
   local extended_last = false
-  -- boxed streams hard-wrap so soft-wrap is rare; right border still repeats if it happens
-  local wrap_style = streaming_thinking and STYLES.thinking or nil
-  local wrap_w = wrap_style and content_wrap_width(buf, wrap_style) or nil
+  local is_think = streaming_thinking
+  local is_asst = streaming_assistant and not is_think
+  local pad = is_asst and assistant_pad() or ""
+  local wrap_w
+  if is_think then
+    wrap_w = content_wrap_width(buf, STYLES.thinking)
+  elseif is_asst then
+    wrap_w = assistant_line_width(buf)
+  end
   with_write(buf, function()
     local n = line_count(buf)
     local last = vim.api.nvim_buf_get_lines(buf, n - 1, n, false)[1] or ""
@@ -1081,22 +1117,27 @@ local function append_text_delta(buf, delta)
       if text == "" and last == "" then
         return
       end
+      if text == "" then
+        vim.api.nvim_buf_set_lines(buf, -1, -1, false, { "" })
+        return
+      end
+      local line = pad ~= "" and (pad .. text) or text
       if wrap_w then
-        for _, w in ipairs(wrap_line(text or "", wrap_w, "")) do
+        for _, w in ipairs(wrap_line(line, wrap_w, pad)) do
           vim.api.nvim_buf_set_lines(buf, -1, -1, false, { w })
         end
       else
-        vim.api.nvim_buf_set_lines(buf, -1, -1, false, { text })
+        vim.api.nvim_buf_set_lines(buf, -1, -1, false, { line })
       end
     end
 
     if is_structural_line(last) or last == "" then
-      push_line(parts[1])
+      push_line(parts[1] or "")
     else
       extended_last = true
       local merged = last .. (parts[1] or "")
       if wrap_w and vim.fn.strdisplaywidth(merged) > wrap_w then
-        local wrapped = wrap_line(merged, wrap_w, "")
+        local wrapped = wrap_line(merged, wrap_w, pad)
         vim.api.nvim_buf_set_lines(buf, n - 1, n, false, wrapped)
       else
         vim.api.nvim_buf_set_lines(buf, n - 1, n, false, { merged })
@@ -1382,7 +1423,7 @@ local function paint_messages(buf, messages)
           in_thinking_body = false
           M.append(buf, "")
           for line in (parts.text .. "\n"):gmatch("(.-)\n") do
-            M.append(buf, line)
+            append_assistant_line(buf, line)
           end
         end
         if parts.tool_calls and #parts.tool_calls > 0 then

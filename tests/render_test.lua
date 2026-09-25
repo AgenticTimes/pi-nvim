@@ -119,16 +119,17 @@ render.on_event(b, {
   assistantMessageEvent = { type = "text_delta", delta = "\n\nmore" },
 })
 lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
--- find last assistant block
+-- find last assistant block (indented to match boxed body)
 local saw_title, saw_item, saw_more = false, false, false
 for _, l in ipairs(lines) do
-  if l == "## Title" then
+  if vim.trim(l) == "## Title" then
     saw_title = true
+    h.assert_truthy(l:match("^%s+## Title"), "title indented")
   end
-  if l == "- item1" then
+  if vim.trim(l) == "- item1" then
     saw_item = true
   end
-  if l == "more" then
+  if vim.trim(l) == "more" then
     saw_more = true
   end
 end
@@ -229,6 +230,15 @@ h.assert_truthy(joined:find("step one", 1, true), "thinking line1")
 h.assert_truthy(joined:find("step two", 1, true), "thinking line2")
 h.assert_false(joined:find("### assistant", 1, true), "no assistant header")
 h.assert_truthy(joined:find("final answer", 1, true), "answer text")
+local answer_line
+for _, l in ipairs(lines) do
+  if l:find("final answer", 1, true) then
+    answer_line = l
+    break
+  end
+end
+h.assert_truthy(answer_line and answer_line:match("^%s+final answer"), "answer indented like box body")
+h.assert_eq(answer_line:match("^(%s*)"), "   ", "answer left gutter matches ▌│ ")
 -- thinking lines have PiThinking mark
 local tns = vim.api.nvim_get_namespaces()["pi_role"]
 local tmarks = vim.api.nvim_buf_get_extmarks(b, tns, 0, -1, { details = true })
