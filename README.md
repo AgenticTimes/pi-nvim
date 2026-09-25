@@ -47,7 +47,7 @@ Neovim-native frontend for [pi](https://github.com/earendil-works/pi) coding age
 
 On first open (`,ai`), if `resume_last = true` (default), switches to the newest session for the current cwd and fills the chat from history. `,aI` / `:PiNewSession` always starts fresh.
 
-In review buffers: `a` accept, `r` reject, `]f`/`[f` next/prev.
+In review buffers: `a`/`r` accept/reject file · `A`/`R` accept/reject all · `ah`/`rh` hunk · `]f`/`[f` next/prev file · `q` close (returns to chat when queue empties).
 
 In chat: `<CR>` open ask popup (or expand/collapse tool under cursor) · `za` toggle tool expand · `]]`/`[[` next/prev message · `q` close · `<Tab>` toggle ask.
 

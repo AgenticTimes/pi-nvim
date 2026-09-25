@@ -6,6 +6,12 @@ package.path = h.root .. "/lua/?.lua;" .. h.root .. "/lua/?/init.lua;" .. packag
 package.loaded["pi.session"] = nil
 package.loaded["pi.review"] = nil
 package.loaded["pi.config"] = nil
+package.loaded["pi.runtime"] = {
+  ensure_started = function() end,
+  prompt = function() end,
+  abort = function() end,
+}
+package.loaded["pi.ui"] = nil
 
 local session = require("pi.session")
 local review = require("pi.review")
@@ -45,11 +51,18 @@ h.assert_eq(after[2], before_accept[2], "after kept")
 -- no "No pending diffs" scratch left in a window
 local empty_scratch = false
 for _, w in ipairs(vim.api.nvim_list_wins()) do
-  local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(w), 0, 1, false)
-  if lines[1] == "No pending diffs." then
+  local blines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(w), 0, 1, false)
+  if blines[1] == "No pending diffs." then
     empty_scratch = true
   end
 end
 h.assert_false(empty_scratch, "review chrome closed without empty scratch")
-h.assert_eq(vim.api.nvim_win_get_buf(0), b2, "stays on accepted file")
+-- queue empty → back to pi chat
+h.assert_truthy(require("pi.ui").is_open(), "pi chat open after last accept")
+h.assert_eq(vim.api.nvim_get_current_win(), require("pi.ui").chat_win(), "focused chat")
+require("pi.ui").close()
 require("pi.config").opts.write_on_accept = true
+package.loaded["pi.runtime"] = nil
+package.loaded["pi.ui"] = nil
+package.loaded["pi.session"] = nil
+package.loaded["pi.review"] = nil

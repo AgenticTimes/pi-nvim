@@ -5,6 +5,12 @@ package.path = h.root .. "/lua/?.lua;" .. h.root .. "/lua/?/init.lua;" .. packag
 package.loaded["pi.session"] = nil
 package.loaded["pi.review"] = nil
 package.loaded["pi.config"] = nil
+package.loaded["pi.runtime"] = {
+  ensure_started = function() end,
+  prompt = function() end,
+  abort = function() end,
+}
+package.loaded["pi.ui"] = nil
 
 local session = require("pi.session")
 local review = require("pi.review")
@@ -28,10 +34,6 @@ review.open(1)
 -- place cursor on changed line
 review.open(1)
 -- hint sits once above the first changed hunk
-local hint_ns = nil
-for _, ns in pairs(vim.api.nvim_get_namespaces()) do
-  -- resolve by scanning extmarks with virt_lines_above
-end
 local found_hint = false
 for name, id in pairs(vim.api.nvim_get_namespaces()) do
   if name == "pi_review_hint" then
@@ -43,8 +45,8 @@ for name, id in pairs(vim.api.nvim_get_namespaces()) do
         for _, chunk in ipairs(d.virt_lines[1] or {}) do
           s = s .. tostring(chunk[1])
         end
-        h.assert_truthy(s:find("accept", 1, true), "hint mentions accept: " .. s)
-        h.assert_truthy(s:find("reject", 1, true), "hint mentions reject")
+        h.assert_truthy(s:find("A/R", 1, true) or s:find("all", 1, true), "hint mentions accept-all: " .. s)
+        h.assert_truthy(s:find("a/r", 1, true) or s:find("file", 1, true), "hint mentions file keys")
         found_hint = true
         h.assert_eq(m[2], 1, "hint above first changed row (0-based line 1)")
       end
@@ -77,5 +79,10 @@ local lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
 h.assert_truthy(lines[2] == "NEW" or lines[3] == "keep2" or lines[3] == "CHANGED", "partial state ok")
 
 require("pi.config").opts.write_on_accept = true
+pcall(function()
+  require("pi.ui").close()
+end)
 package.loaded["pi.session"] = nil
 package.loaded["pi.review"] = nil
+package.loaded["pi.runtime"] = nil
+package.loaded["pi.ui"] = nil

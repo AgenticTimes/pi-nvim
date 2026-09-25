@@ -41,7 +41,7 @@ local function paint_hint(buf, before_lines)
   if vim.fn.hlexists("PiReview") == 0 then
     vim.api.nvim_set_hl(0, "PiReview", { fg = 0xe0af68, bold = true })
   end
-  local text = " a accept · r reject · ah/rh hunk · ]h/[h · q close "
+  local text = " a/r file · A/R all · ah/rh hunk · ]h/[h · q close "
   pcall(vim.api.nvim_buf_set_extmark, buf, hint_ns, row - 1, 0, {
     virt_lines = { { { text, "PiReview" } } },
     virt_lines_above = true,
@@ -76,9 +76,25 @@ function M.close(prefer_buf)
   end
 end
 
---- Queue empty: close review UI instead of a "No pending diffs" scratch that needs :q.
-local function finish_empty(prefer_buf)
+--- Queue empty: close review chrome and return to pi chat.
+--- Busy → notify wait (auto_show will reopen on new edits); idle → review done.
+local function finish_empty(prefer_buf, reason)
   M.close(prefer_buf)
+  local busy = session.is_busy()
+  pcall(function()
+    local ui = require("pi.ui")
+    if not ui.is_open() then
+      ui.open()
+    end
+    ui.focus_chat()
+  end)
+  if reason == "none" then
+    vim.notify("pi: no pending diffs", vim.log.levels.INFO)
+  elseif busy then
+    vim.notify("pi: no more diffs · waiting for agent…", vim.log.levels.INFO)
+  else
+    vim.notify("pi: review done", vim.log.levels.INFO)
+  end
 end
 
 local function redraw_list()
@@ -88,7 +104,7 @@ local function redraw_list()
   local touched = session.touched()
   local lines = {
     "pending (" .. #touched .. ")",
-    "a accept · r reject · ah/rh hunk · ]h/[h · :PiAcceptAll / :PiRejectAll",
+    "a/r file · A/R all · ah/rh hunk · ]h/[h · q close",
     "]f/[f next/prev",
     "",
   }
@@ -133,6 +149,12 @@ local function map_keys(bufnr)
   vim.keymap.set("n", k.reject, function()
     M.reject()
   end, opts)
+  vim.keymap.set("n", "A", function()
+    M.accept_all()
+  end, opts)
+  vim.keymap.set("n", "R", function()
+    M.reject_all()
+  end, opts)
   vim.keymap.set("n", k.next_file, function()
     M.next(1)
   end, opts)
@@ -160,8 +182,7 @@ function M.open(idx)
   ensure_list()
   local touched = session.touched()
   if #touched == 0 then
-    finish_empty()
-    vim.notify("pi: no pending diffs", vim.log.levels.INFO)
+    finish_empty(nil, "none")
     return
   end
   idx = idx or file_idx
@@ -181,7 +202,7 @@ function M.open(idx)
   end
   vim.api.nvim_set_current_win(code_win)
   vim.api.nvim_win_set_buf(code_win, t.buf)
-  pcall(vim.api.nvim_set_option_value, "winbar", " AFTER " .. t.rel .. " [a]/[r] ", { win = code_win })
+  pcall(vim.api.nvim_set_option_value, "winbar", " AFTER " .. t.rel .. " [a]/[r] [A]all ", { win = code_win })
 
   if not list_win or not vim.api.nvim_win_is_valid(list_win) then
     vim.cmd("topleft 28vsplit")
