@@ -260,6 +260,50 @@ for name, ns in pairs(ns_list) do
 end
 h.assert_truthy(has_asst_box, "answer boxed with left chrome")
 
+-- successive final answers get #1, #2 in the top-left label slot
+local function collect_turn_labels(buf)
+  local labels = {}
+  for name, ns in pairs(vim.api.nvim_get_namespaces()) do
+    if tostring(name):match("^pi_box_") then
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })) do
+        local vl = m[4] and m[4].virt_lines
+        if vl then
+          for _, row in ipairs(vl) do
+            for _, chunk in ipairs(row) do
+              if chunk[2] == "PiAssistant" and tostring(chunk[1]):match("^#%d+$") then
+                labels[#labels + 1] = chunk[1]
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  table.sort(labels)
+  return labels
+end
+render.on_event(b, { type = "agent_start" })
+render.on_event(b, {
+  type = "message_update",
+  assistantMessageEvent = { type = "text_delta", delta = "turn-a" },
+})
+render.on_event(b, {
+  type = "message_update",
+  assistantMessageEvent = { type = "text_end" },
+})
+render.on_event(b, { type = "agent_start" })
+render.on_event(b, {
+  type = "message_update",
+  assistantMessageEvent = { type = "text_delta", delta = "turn-b" },
+})
+render.on_event(b, {
+  type = "message_update",
+  assistantMessageEvent = { type = "text_end" },
+})
+local turn_labels = collect_turn_labels(b)
+h.assert_truthy(vim.tbl_contains(turn_labels, "#1"), "first answer labeled #1")
+h.assert_truthy(vim.tbl_contains(turn_labels, "#2"), "second answer labeled #2")
+
 -- markdown tables pad columns to display width (CJK-safe); box supplies the gutter
 render.on_event(b, { type = "agent_start" })
 render.on_event(b, {

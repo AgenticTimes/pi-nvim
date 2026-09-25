@@ -68,7 +68,7 @@ local STYLES = {
     body_hl = "PiThinkBubble",
   },
   -- Final answer: same ▌│ chrome widths as toolcall so body text shares columns.
-  -- Empty label → top rule with no "assistant" chip (user asked for inset, not a tag).
+  -- Label is set per-box to the turn number ("#1", "#2", …) via make_assistant_style.
   assistant = {
     label = "",
     label_hl = "PiAssistant",
@@ -453,6 +453,47 @@ end
 
 local function close_assistant_box()
   asst_box = nil
+end
+
+local function is_assistant_style(style)
+  return style and style.bar_hl == "PiAsstBar"
+end
+
+--- How many final-answer boxes already exist in this buffer (chronological).
+local function count_assistant_boxes(buf)
+  local n = 0
+  for _, b in ipairs(bubbles[buf] or {}) do
+    if is_assistant_style(b.style) then
+      n = n + 1
+    end
+  end
+  return n
+end
+
+--- Per-box style copy with turn number in the top-left (same slot as "toolcall").
+local function make_assistant_style(buf)
+  local s = vim.tbl_extend("force", {}, STYLES.assistant)
+  s.label = "#" .. tostring(count_assistant_boxes(buf) + 1)
+  return s
+end
+
+--- After prepending history, renumber answer boxes #1..#N by buffer order.
+local function renumber_assistant_boxes(buf)
+  local list = {}
+  for _, b in ipairs(bubbles[buf] or {}) do
+    if is_assistant_style(b.style) then
+      list[#list + 1] = b
+    end
+  end
+  table.sort(list, function(a, c)
+    return a.start0 < c.start0
+  end)
+  for i, b in ipairs(list) do
+    local s = vim.tbl_extend("force", {}, STYLES.assistant)
+    s.label = "#" .. tostring(i)
+    b.style = s
+    paint_box(b)
+  end
 end
 
 --- Register a finished range and paint it
@@ -1221,7 +1262,7 @@ local function ensure_assistant_header(buf)
   in_thinking_body = false
   -- blank separator outside the bubble; box chrome owns the inset
   M.append(buf, "")
-  asst_box = { buf = buf, box = open_box(buf, STYLES.assistant) }
+  asst_box = { buf = buf, box = open_box(buf, make_assistant_style(buf)) }
 end
 
 local function ensure_thinking_header(buf)
@@ -1647,7 +1688,7 @@ local function paint_messages(buf, messages)
           for line in (parts.text .. "\n"):gmatch("(.-)\n") do
             append_assistant_line(buf, line)
           end
-          commit_box(buf, STYLES.assistant, start0, vim.api.nvim_buf_line_count(buf))
+          commit_box(buf, make_assistant_style(buf), start0, vim.api.nvim_buf_line_count(buf))
         end
         if parts.tool_calls and #parts.tool_calls > 0 then
           for _, call in ipairs(parts.tool_calls) do
@@ -1789,6 +1830,7 @@ function M.load_older(buf, win)
   end
   bubbles[tmp] = nil
   pcall(vim.api.nvim_buf_delete, tmp, { force = true })
+  renumber_assistant_boxes(buf)
   if not history_by_buf[buf] and vim.api.nvim_buf_get_lines(buf, 2, 3, false)[1] == OLDER_MARK then
     with_write(buf, function()
       vim.api.nvim_buf_set_lines(buf, 2, 3, false, {})
