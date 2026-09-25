@@ -20,21 +20,21 @@
 
 **Files:** `lua/pi/render.lua`, `tests/render_test.lua`
 
-- [ ] Add `collapse_tool_lines(full, expanded, has_err)` 
-- [ ] `tool_block` returns full lines (cap ~80); callers apply collapse
-- [ ] Store `tool_full` / `tool_expanded` on bubble via `note_tool_lines` / upsert
-- [ ] Test: long args → marker line; short → no marker
+- [x] Add `collapse_tool_lines(full, expanded, has_err)` 
+- [x] `tool_block` returns full lines (cap ~80); callers apply collapse
+- [x] Store `tool_full` / `tool_expanded` on bubble via `note_tool_lines` / upsert
+- [x] Test: long args → marker line; short → no marker
 
 ### Task 2: Toggle + keymaps
 
 **Files:** `lua/pi/render.lua`, `lua/pi/ui.lua`
 
-- [ ] `M.toggle_tool_at_cursor(buf, win)` find tool bubble, swap lines, shift bubbles, repaint
-- [ ] Chat `<CR>`: toggle if handled, else `open_input`
-- [ ] Chat `za`: toggle
-- [ ] Test: expand then collapse restores marker
+- [x] `M.toggle_tool_at_cursor(buf, win)` find tool bubble, swap lines, shift bubbles, repaint
+- [x] Chat `<CR>`: toggle if handled, else `open_input`
+- [x] Chat `za`: toggle
+- [x] Test: expand then collapse restores marker
 
 ### Task 3: Docs + suite
 
-- [ ] README one-liner under chat keys
-- [ ] `nvim -u NONE -l tests/run.lua` green
+- [x] README one-liner under chat keys
+- [x] `nvim -u NONE -l tests/run.lua` green
