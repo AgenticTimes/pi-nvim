@@ -27,6 +27,31 @@ vim.api.nvim_buf_set_lines(b, 0, -1, false, { "keep", "NEW", "keep2" })
 review.open(1)
 -- place cursor on changed line
 review.open(1)
+-- hint sits once above the first changed hunk
+local hint_ns = nil
+for _, ns in pairs(vim.api.nvim_get_namespaces()) do
+  -- resolve by scanning extmarks with virt_lines_above
+end
+local found_hint = false
+for name, id in pairs(vim.api.nvim_get_namespaces()) do
+  if name == "pi_review_hint" then
+    local marks = vim.api.nvim_buf_get_extmarks(b, id, 0, -1, { details = true })
+    for _, m in ipairs(marks) do
+      local d = m[4] or {}
+      if d.virt_lines_above and d.virt_lines then
+        local s = ""
+        for _, chunk in ipairs(d.virt_lines[1] or {}) do
+          s = s .. tostring(chunk[1])
+        end
+        h.assert_truthy(s:find("accept", 1, true), "hint mentions accept: " .. s)
+        h.assert_truthy(s:find("reject", 1, true), "hint mentions reject")
+        found_hint = true
+        h.assert_eq(m[2], 1, "hint above first changed row (0-based line 1)")
+      end
+    end
+  end
+end
+h.assert_truthy(found_hint, "first-hunk hint present")
 h.assert_truthy(review.accept_hunk(), "accept hunk")
 local t = session.touched()[1]
 h.assert_eq(t.before[2], "NEW", "before updated")

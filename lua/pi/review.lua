@@ -6,8 +6,52 @@ local M = {}
 local file_idx = 0
 local list_buf, list_win, before_win, code_win
 local mapped = {}
+local hint_ns = vim.api.nvim_create_namespace("pi_review_hint")
+local hint_buf ---@type integer|nil
+
+local function clear_hint()
+  if hint_buf and vim.api.nvim_buf_is_valid(hint_buf) then
+    pcall(vim.api.nvim_buf_clear_namespace, hint_buf, hint_ns, 0, -1)
+  end
+  hint_buf = nil
+end
+
+--- First differing 1-based row between AFTER buffer lines and BEFORE snapshot.
+local function first_hunk_row(after, before)
+  local n = math.max(#after, #before)
+  for i = 1, n do
+    if (after[i] or "") ~= (before[i] or "") then
+      return i
+    end
+  end
+  return nil
+end
+
+--- One hint above the first changed hunk (not every hunk).
+local function paint_hint(buf, before_lines)
+  clear_hint()
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  local after = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local row = first_hunk_row(after, before_lines or {})
+  if not row then
+    return
+  end
+  if vim.fn.hlexists("PiReview") == 0 then
+    vim.api.nvim_set_hl(0, "PiReview", { fg = 0xe0af68, bold = true })
+  end
+  local text = " a accept · r reject · ah/rh hunk · ]h/[h · q close "
+  pcall(vim.api.nvim_buf_set_extmark, buf, hint_ns, row - 1, 0, {
+    virt_lines = { { { text, "PiReview" } } },
+    virt_lines_above = true,
+    priority = 200,
+  })
+  hint_buf = buf
+end
 
 local function close_diff()
+  clear_hint()
   pcall(vim.cmd, "diffoff!")
   if before_win and vim.api.nvim_win_is_valid(before_win) then
     pcall(vim.api.nvim_win_close, before_win, true)
@@ -177,6 +221,7 @@ function M.open(idx)
   map_keys(list_buf)
   map_keys(t.buf)
   map_keys(before_buf)
+  paint_hint(t.buf, t.before)
   redraw_list()
 end
 
