@@ -17,7 +17,8 @@ Neovim-native frontend for [pi](https://github.com/earendil-works/pi) coding age
 
 ```lua
 {
-  dir = "~/source/pi.nvim", -- or git url when published
+  "AgenticTimes/pi-nvim",
+  name = "pi.nvim", -- optional; keeps Lazy UI name as pi.nvim
   lazy = false,
   config = function()
     require("pi").setup({
