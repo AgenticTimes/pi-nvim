@@ -33,30 +33,25 @@ local function trunc_disp(s, cols)
   return vim.fn.strcharpart(s, 0, math.max(1, cols - 1)) .. "…"
 end
 
---- Collapsed tool box: header + at most one truncated body line + marker.
---- Soft-wrapped long commands are often only 2–4 buffer lines, so the old
---- "keep 1+3 lines" rule left them unchanged and ftt reported "too short".
+--- Collapsed tool box: header + fold marker (hide body — even a single soft-
+--- wrapped command line). Expand via ftt / za / <CR>.
 function M.collapse_tool_lines(full, expanded, has_err)
   full = full or {}
   if expanded or #full == 0 then
     return full
   end
+  local header = trunc_disp(full[1], 64)
   if #full == 1 then
-    local t = trunc_disp(full[1])
-    if t == full[1] then
+    if header == full[1] then
       return full
     end
-    return { t, "  … ftt" }
+    return { header, "  … ftt to expand" }
   end
-  local out = { full[1], trunc_disp(full[2]) }
-  local hidden = #full - 2
-  if hidden > 0 then
-    out[3] = string.format("  … +%d lines  ftt", hidden)
-  else
-    -- Hide the (possibly soft-wrapped) body line entirely when only 2 rows
-    out = { full[1], "  … ftt" }
-  end
-  return out
+  local hidden = #full - 1
+  return {
+    header,
+    string.format("  … +%d lines  ftt to expand", hidden),
+  }
 end
 
 --- Collapsed thinking box (default expanded; ftk toggles).
@@ -65,20 +60,17 @@ function M.collapse_thinking_lines(full, expanded)
   if expanded or #full == 0 then
     return full
   end
-  if #full <= 2 then
-    if #full == 1 then
-      local t = trunc_disp(full[1])
-      if t == full[1] then
-        return full
-      end
-      return { t, "  … ftk" }
+  local header = trunc_disp(full[1], 64)
+  if #full == 1 then
+    if header == full[1] then
+      return full
     end
-    -- 2 lines: keep first, fold the rest
-    return { trunc_disp(full[1]), "  … ftk" }
+    return { header, "  … ftk to expand" }
   end
-  local out = { trunc_disp(full[1]), trunc_disp(full[2]) }
-  out[3] = string.format("  … +%d lines  ftk", #full - 2)
-  return out
+  return {
+    header,
+    string.format("  … +%d lines  ftk to expand", #full - 1),
+  }
 end
 
 --- The arguments a tool was actually called with.

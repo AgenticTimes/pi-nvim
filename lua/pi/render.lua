@@ -366,10 +366,17 @@ local function fold_hint_for(b)
     return nil
   end
   if b.style.bar_hl == "PiToolBar" then
-    return "ftt"
+    -- Default is expanded; nil counts as expanded
+    if b.tool_expanded == false then
+      return "ftt to expand"
+    end
+    return "ftt to fold"
   end
   if b.style.bar_hl == "PiThinkBar" then
-    return "ftk"
+    if b.fold_expanded == false then
+      return "ftk to expand"
+    end
+    return "ftk to fold"
   end
   return nil
 end
@@ -1323,11 +1330,11 @@ function M.toggle_fold_kind(buf, kind)
   end
   local any_expanded = false
   for _, b in ipairs(boxes) do
-    if kind == "tool" and b.tool_expanded then
+    if kind == "tool" and b.tool_expanded ~= false then
       any_expanded = true
       break
     end
-    if kind == "thinking" and b.fold_expanded then
+    if kind == "thinking" and b.fold_expanded ~= false then
       any_expanded = true
       break
     end
