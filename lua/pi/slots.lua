@@ -121,10 +121,71 @@ local function make_chat_buf(name)
   return b
 end
 
+local focus_autocmd ---@type integer|nil
+
 local function title_for(slot)
   local dot = (slot.status == "busy" or slot.status == "streaming") and "●" or "○"
   local tag = slot.id == primary_id and "PRIMARY" or ("#" .. tostring(slot.id))
   return string.format(" %s %s ", dot, tag)
+end
+
+--- Any slot window can interact: focus → primary, Enter → ask that agent.
+local function map_slot_keys(slot)
+  local buf = slot.chat_buf
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  if vim.b[buf].pi_slot_keys then
+    return
+  end
+  vim.b[buf].pi_slot_keys = true
+  local opts = { buffer = buf, nowait = true, silent = true }
+  vim.keymap.set("n", "<CR>", function()
+    M.set_primary(slot.id)
+    local win = slot.win
+    if require("pi.render").toggle_tool_at_cursor(slot.chat_buf, win) then
+      return
+    end
+    require("pi.ui").open_input()
+  end, vim.tbl_extend("force", opts, { desc = "pi: focus slot + ask" }))
+  vim.keymap.set("n", "za", function()
+    M.set_primary(slot.id)
+    require("pi.render").toggle_tool_at_cursor(slot.chat_buf, slot.win)
+  end, vim.tbl_extend("force", opts, { desc = "pi: toggle tool expand" }))
+  vim.keymap.set("n", "q", function()
+    M.hide()
+  end, vim.tbl_extend("force", opts, { desc = "pi: hide slots" }))
+  local k = require("pi.config").opts.keys or {}
+  local next_m = k.next_message or "]]"
+  local prev_m = k.prev_message or "[["
+  vim.keymap.set("n", next_m, function()
+    M.set_primary(slot.id)
+    require("pi.render").jump_message(slot.chat_buf, slot.win, 1)
+  end, opts)
+  vim.keymap.set("n", prev_m, function()
+    M.set_primary(slot.id)
+    require("pi.render").jump_message(slot.chat_buf, slot.win, -1)
+  end, opts)
+end
+
+local function ensure_focus_autocmd()
+  if focus_autocmd then
+    return
+  end
+  focus_autocmd = vim.api.nvim_create_autocmd("WinEnter", {
+    callback = function()
+      if not visible or #slots < 2 then
+        return
+      end
+      local win = vim.api.nvim_get_current_win()
+      for _, s in ipairs(slots) do
+        if s.win == win and s.id ~= primary_id then
+          M.set_primary(s.id)
+          return
+        end
+      end
+    end,
+  })
 end
 
 local function configure_win(win)
@@ -214,6 +275,8 @@ function M.ensure_default()
   next_id = next_id + 1
   slots[1] = slot
   primary_id = slot.id
+  map_slot_keys(slot)
+  ensure_focus_autocmd()
   return slot
 end
 
@@ -236,6 +299,8 @@ function M.create()
     is_default = false,
   }
   slots[#slots + 1] = slot
+  map_slot_keys(slot)
+  ensure_focus_autocmd()
   bind_satellite(slot)
   local ok, err = pcall(function()
     require("pi.runtime").start_job(client, {

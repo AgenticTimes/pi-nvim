@@ -42,7 +42,7 @@
 ### M2 — multi-slot parallel ✅
 - N pi jobs (`pi.client.new`); `pi.slots` create/close/cycle; primary + satellites layout.
 - `<C-Space>` → `slots.toggle_visible()`; `<leader>a+` / `a_` / `a>` new/close/cycle.
-- Slot-local abort/prompt on primary; status dots on satellites.
+- **Any slot window is interactive:** click / `<CR>` promotes that slot to primary and opens ask; prompt/abort target the focused slot.
 
 ### M3 — multi-backend
 - Stable Backend interface; second agent adapter.
