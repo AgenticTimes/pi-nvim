@@ -39,8 +39,8 @@ M.opts = {
   summon_key = "<C-Space>",
   --- On VimEnter: start RPC in background (no UI); notify when ready.
   bootstrap = true,
-  --- Max concurrent slots (1 primary + satellites).
-  max_slots = 4,
+  --- Max concurrent slots (1 primary + satellites). Master shrinks as count grows.
+  max_slots = 6,
   write_on_accept = true,
   rpc_timeout = 30,
   busy_submit = "steer", -- "steer" | "followUp" when agent is streaming

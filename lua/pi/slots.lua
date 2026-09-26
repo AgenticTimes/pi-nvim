@@ -35,7 +35,8 @@ local function chrome_rows()
   return cmd + status + spare
 end
 
---- Pure layout math (testable). Focused master left (~68%); others stack right.
+--- Pure layout math (testable). Focused master left; others stack right.
+--- As satellite count grows, master shrinks so the new slot fits.
 ---@param opts { cols: integer, lines: integer, chrome?: integer, ids: integer[], primary: integer, margin?: integer }
 ---@return table<integer, { row: integer, col: integer, width: integer, height: integer, border: string, zindex: integer, focused: boolean }>
 function M.compute_layout(opts)
@@ -67,16 +68,17 @@ function M.compute_layout(opts)
     return out
   end
   local gap = 1
-  -- Side stack: readable mini panes; master takes the rest and full height.
-  local stack_w = math.max(22, math.min(math.floor(usable_w * 0.34), math.floor(usable_w * 0.42)))
-  local master_w = math.max(24, usable_w - stack_w - gap)
   local n = #sats
-  local cell_h = math.max(5, math.floor((usable_h - (n - 1) * gap) / n))
+  -- More satellites → wider stack / narrower master (room for the new slot).
+  local stack_frac = math.min(0.52, 0.26 + n * 0.06)
+  local stack_w = math.max(18, math.floor(usable_w * stack_frac))
+  local master_w = math.max(20, usable_w - stack_w - gap)
+  local cell_h = math.max(4, math.floor((usable_h - (n - 1) * gap) / n))
   for i, id in ipairs(sats) do
     local row = margin + (i - 1) * (cell_h + gap)
     local h = cell_h
     if i == n then
-      h = math.max(5, usable_h - (row - margin))
+      h = math.max(4, usable_h - (row - margin))
     end
     out[id] = {
       row = row,
@@ -453,8 +455,14 @@ function M.create()
   pcall(function()
     client.send({ type = "get_state", id = "slot-state-" .. tostring(id) })
   end)
-  if visible then
-    M.show()
+  -- Shrink the master float and stack the new slot on the right
+  if visible or require("pi.ui").is_open() then
+    visible = true
+    local p = M.primary()
+    if p and (not p.win or not vim.api.nvim_win_is_valid(p.win)) then
+      p.win = require("pi.ui").chat_win()
+    end
+    M.apply_layout()
   end
   vim.notify("pi: slot #" .. tostring(id) .. " started", vim.log.levels.INFO)
   return slot

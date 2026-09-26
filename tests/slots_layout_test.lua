@@ -55,4 +55,24 @@ h.assert_truthy(lay2[2].focused, "promoted focused")
 h.assert_truthy(lay2[2].width > lay2[1].width, "promoted is master")
 h.assert_truthy(lay2[1].col > lay2[2].col, "old primary moves to stack")
 
+-- as slots fill, master shrinks to make room
+local few = slots.compute_layout({
+  cols = 120,
+  lines = 50,
+  chrome = 2,
+  ids = { 1, 2 },
+  primary = 1,
+  margin = 1,
+})
+local many = slots.compute_layout({
+  cols = 120,
+  lines = 50,
+  chrome = 2,
+  ids = { 1, 2, 3, 4, 5 },
+  primary = 1,
+  margin = 1,
+})
+h.assert_truthy(many[1].width < few[1].width, "master shrinks when more slots")
+h.assert_truthy(many[2].width > few[2].width, "stack widens when more slots")
+
 print("OK slots_layout_test")
