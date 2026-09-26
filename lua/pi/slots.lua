@@ -238,6 +238,7 @@ local function configure_win(win, focused)
 end
 
 local function satellite_on_event(slot, ev)
+  local prev = slot.status
   if ev.type == "agent_start" or ev.type == "turn_start" then
     slot.status = "busy"
   elseif ev.type == "agent_end" or ev.type == "agent_settled" then
@@ -248,6 +249,11 @@ local function satellite_on_event(slot, ev)
   end)
   if slot.win and vim.api.nvim_win_is_valid(slot.win) then
     pcall(vim.api.nvim_win_set_config, slot.win, { title = title_for(slot), title_pos = "center" })
+  end
+  if prev ~= slot.status then
+    pcall(function()
+      require("pi.statusline").repaint()
+    end)
   end
 end
 
@@ -263,6 +269,52 @@ end
 
 function M.list()
   return vim.deepcopy(slots)
+end
+
+--- Live slot refs (for statusline win targeting).
+function M.live()
+  return slots
+end
+
+function M.all_wins()
+  local wins = {}
+  for _, s in ipairs(slots) do
+    if s.win and vim.api.nvim_win_is_valid(s.win) then
+      wins[#wins + 1] = s.win
+    end
+  end
+  return wins
+end
+
+--- Windows whose agent is actually busy (not merely focused).
+function M.busy_wins()
+  local wins = {}
+  for _, s in ipairs(slots) do
+    if (s.status == "busy" or s.status == "streaming") and s.win and vim.api.nvim_win_is_valid(s.win) then
+      wins[#wins + 1] = s.win
+    end
+  end
+  return wins
+end
+
+--- Keep primary slot.status in sync with singleton session (tools path).
+function M.sync_primary_status()
+  local p = M.primary()
+  if not p then
+    return
+  end
+  local st = "idle"
+  pcall(function()
+    st = require("pi.session").get().status
+  end)
+  local next_status = (st == "streaming" or st == "compacting") and "busy" or "idle"
+  if p.status == next_status then
+    return
+  end
+  p.status = next_status
+  if p.win and vim.api.nvim_win_is_valid(p.win) then
+    pcall(vim.api.nvim_win_set_config, p.win, { title = title_for(p), title_pos = "center" })
+  end
 end
 
 function M.count()
@@ -485,6 +537,9 @@ function M.apply_layout()
       end
     end
   end
+  pcall(function()
+    require("pi.statusline").repaint()
+  end)
 end
 
 function M.show()

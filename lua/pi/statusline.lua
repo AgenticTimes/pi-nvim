@@ -45,11 +45,48 @@ local function close_overlay()
   overlay_buf = nil
 end
 
-local function paint_overlay(text)
-  local chat_win
+local function clear_pi_winbars()
+  local seen = {}
+  local function clear(win)
+    if not win or seen[win] or not vim.api.nvim_win_is_valid(win) then
+      return
+    end
+    seen[win] = true
+    pcall(vim.api.nvim_set_option_value, "winbar", "", { scope = "local", win = win })
+  end
   pcall(function()
-    chat_win = require("pi.ui").chat_win()
+    for _, win in ipairs(require("pi.slots").all_wins()) do
+      clear(win)
+    end
   end)
+  pcall(function()
+    clear(require("pi.ui").chat_win())
+  end)
+end
+
+--- Wins that should show Working: only slots whose agent is busy.
+local function busy_target_wins()
+  local wins = {}
+  pcall(function()
+    wins = require("pi.slots").busy_wins()
+  end)
+  if #wins > 0 then
+    return wins
+  end
+  -- Single-slot / status not synced yet: primary chat win only
+  local win
+  pcall(function()
+    win = require("pi.ui").chat_win()
+  end)
+  if win and vim.api.nvim_win_is_valid(win) then
+    return { win }
+  end
+  return {}
+end
+
+local function paint_overlay(text)
+  local targets = busy_target_wins()
+  local chat_win = targets[1]
   if not chat_win or not vim.api.nvim_win_is_valid(chat_win) or text == "" then
     close_overlay()
     return
@@ -92,15 +129,31 @@ local function paint_overlay(text)
 end
 
 local function paint_chat_winbar(text, busy)
-  pcall(function()
-    local win = require("pi.ui").chat_win()
-    if not win or not vim.api.nvim_win_is_valid(win) then
-      return
+  clear_pi_winbars()
+  if text == "" then
+    return
+  end
+  ensure_hl()
+  local hl = busy and "PiBusy" or "PiReview"
+  local value = "%#" .. hl .. "#" .. text .. "%*"
+  local targets
+  if busy then
+    targets = busy_target_wins()
+  else
+    -- Review cue: primary only
+    targets = {}
+    pcall(function()
+      local win = require("pi.ui").chat_win()
+      if win then
+        targets = { win }
+      end
+    end)
+  end
+  for _, win in ipairs(targets) do
+    if vim.api.nvim_win_is_valid(win) then
+      pcall(vim.api.nvim_set_option_value, "winbar", value, { scope = "local", win = win })
     end
-    local hl = busy and "PiBusy" or "PiReview"
-    local value = text == "" and "" or ("%#" .. hl .. "#" .. text .. "%*")
-    vim.api.nvim_set_option_value("winbar", value, { scope = "local", win = win })
-  end)
+  end
 end
 
 local function refresh()

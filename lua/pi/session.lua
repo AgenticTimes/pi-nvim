@@ -37,6 +37,9 @@ local function sync_busy()
     end
   end)
   pcall(function()
+    require("pi.slots").sync_primary_status()
+  end)
+  pcall(function()
     require("pi.compact_indicator").update({
       compacting = state.status == "compacting",
       auto = state.auto_compaction,
