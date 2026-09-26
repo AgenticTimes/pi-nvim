@@ -38,7 +38,7 @@ function M.collapse_tool_lines(full, expanded, has_err)
   for i = 1, keep do
     out[i] = full[i]
   end
-  out[#out + 1] = string.format("  … +%d lines  ftc", #full - keep)
+  out[#out + 1] = string.format("  … +%d lines  ftt", #full - keep)
   return out
 end
 

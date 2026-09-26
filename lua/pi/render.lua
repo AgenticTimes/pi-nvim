@@ -365,18 +365,11 @@ local function fold_hint_for(b)
   if not b or not b.style then
     return nil
   end
-  if b.style.bar_hl == "PiToolBar" and b.tool_full then
-    return "ftc"
+  if b.style.bar_hl == "PiToolBar" then
+    return "ftt"
   end
-  if b.style.bar_hl == "PiThinkBar" and b.fold_full then
-    return "ftk"
-  end
-  -- streaming thinking (not yet finalized) still hints ftk
   if b.style.bar_hl == "PiThinkBar" then
     return "ftk"
-  end
-  if b.style.bar_hl == "PiToolBar" then
-    return "ftc"
   end
   return nil
 end
@@ -1007,12 +1000,25 @@ end
 --- Stash the full/collapsed tool payload on the current tool box so
 --- toggle_tool_at_cursor can expand/collapse it without re-asking the client.
 local function attach_tool_payload(buf, full, expanded, has_err)
-  if tool_box and tool_box.buf == buf and tool_box.box then
-    local b = tool_box.box
-    b.tool_full = full
-    b.tool_expanded = expanded and true or false
-    b.tool_has_err = has_err and true or false
+  local b = tool_box and tool_box.buf == buf and tool_box.box or nil
+  if not b then
+    -- Multi-slot / hydrate: tool_box may point at another buffer — use the
+    -- latest tool-styled bubble on this buf instead.
+    local list = bubbles[buf] or {}
+    for i = #list, 1, -1 do
+      local cand = list[i]
+      if cand.style and cand.style.bar_hl == "PiToolBar" then
+        b = cand
+        break
+      end
+    end
   end
+  if not b then
+    return
+  end
+  b.tool_full = full
+  b.tool_expanded = expanded and true or false
+  b.tool_has_err = has_err and true or false
 end
 
 --- Text out of a tool_execution_end result payload
@@ -1269,7 +1275,7 @@ function M.toggle_tool_at_cursor(buf, win)
   return apply_box_expand(buf, target, not target.tool_expanded)
 end
 
---- Toggle fold for all toolcall (`ftc`) or thinking (`ftk`) boxes in a buffer.
+--- Toggle fold for all toolcall (`ftc`/`ftt`) or thinking (`ftk`) boxes in a buffer.
 --- If any of that kind is expanded → fold all; otherwise expand all.
 ---@param kind "tool"|"thinking"
 function M.toggle_fold_kind(buf, kind)
@@ -1278,13 +1284,29 @@ function M.toggle_fold_kind(buf, kind)
   end
   local boxes = {}
   for _, b in ipairs(bubbles[buf] or {}) do
-    if kind == "tool" and b.tool_full then
-      boxes[#boxes + 1] = b
-    elseif kind == "thinking" and b.fold_full and b.fold_kind == "thinking" then
-      boxes[#boxes + 1] = b
+    if kind == "tool" then
+      if not b.tool_full and b.style and b.style.bar_hl == "PiToolBar" and b.end0 > b.start0 + 1 then
+        -- Repair: live paint lost tool_full (common when multi-slot stole tool_box)
+        b.tool_full = vim.api.nvim_buf_get_lines(buf, b.start0, b.end0, false)
+        b.tool_expanded = true
+      end
+      if b.tool_full then
+        boxes[#boxes + 1] = b
+      end
+    elseif kind == "thinking" then
+      if not b.fold_full and b.style and b.style.bar_hl == "PiThinkBar" and b.end0 > b.start0 then
+        b.fold_full = vim.api.nvim_buf_get_lines(buf, b.start0, b.end0, false)
+        b.fold_expanded = true
+        b.fold_kind = "thinking"
+      end
+      if b.fold_full and b.fold_kind == "thinking" then
+        boxes[#boxes + 1] = b
+      end
     end
   end
   if #boxes == 0 then
+    local what = kind == "tool" and "toolcall" or "thinking"
+    vim.notify("pi: no foldable " .. what .. " boxes (try ftc/ftt or ftk in the chat pane)", vim.log.levels.INFO)
     return false
   end
   local any_expanded = false
@@ -1307,6 +1329,9 @@ function M.toggle_fold_kind(buf, kind)
     if apply_box_expand(buf, b, want_expanded) then
       ok = true
     end
+  end
+  if not ok then
+    vim.notify("pi: " .. kind .. " boxes too short to fold", vim.log.levels.INFO)
   end
   return ok
 end

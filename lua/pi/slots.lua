@@ -738,14 +738,22 @@ local function map_slot_keys(slot)
     M.set_primary(slot.id)
     require("pi.render").toggle_tool_at_cursor(slot.chat_buf, slot.win)
   end, vim.tbl_extend("force", opts, { desc = "pi: toggle tool expand" }))
-  vim.keymap.set("n", "ftc", function()
+  local function fold_tools()
     M.set_primary(slot.id)
     require("pi.render").toggle_fold_kind(slot.chat_buf, "tool")
-  end, vim.tbl_extend("force", opts, { desc = "pi: fold/unfold toolcalls" }))
-  vim.keymap.set("n", "ftk", function()
+  end
+  local function fold_think()
     M.set_primary(slot.id)
     require("pi.render").toggle_fold_kind(slot.chat_buf, "thinking")
-  end, vim.tbl_extend("force", opts, { desc = "pi: fold/unfold thinking" }))
+  end
+  -- ftc (historic) + ftt (fold tool) + ftk (fold thinking). Also ,tc/,tk via
+  -- localleader so `f` find-char cannot steal the chord.
+  for _, lhs in ipairs({ "ftc", "ftt" }) do
+    vim.keymap.set("n", lhs, fold_tools, vim.tbl_extend("force", opts, { desc = "pi: fold/unfold toolcalls" }))
+  end
+  vim.keymap.set("n", "ftk", fold_think, vim.tbl_extend("force", opts, { desc = "pi: fold/unfold thinking" }))
+  vim.keymap.set("n", "<localleader>tc", fold_tools, vim.tbl_extend("force", opts, { desc = "pi: fold/unfold toolcalls" }))
+  vim.keymap.set("n", "<localleader>tk", fold_think, vim.tbl_extend("force", opts, { desc = "pi: fold/unfold thinking" }))
   vim.keymap.set("n", "q", function()
     M.hide()
   end, vim.tbl_extend("force", opts, { desc = "pi: hide slots" }))

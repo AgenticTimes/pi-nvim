@@ -147,7 +147,7 @@ for i, l in ipairs(vim.api.nvim_buf_get_lines(lb, 0, -1, false)) do
 end
 h.assert_truthy(render.toggle_tool_at_cursor(lb, lwin), "toggle collapses")
 ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
-h.assert_truthy(ljoin:find("ftc", 1, true), "collapse marker ftc: " .. ljoin)
+h.assert_truthy(ljoin:find("ftt", 1, true), "collapse marker ftt: " .. ljoin)
 h.assert_false(ljoin:find("line7", 1, true), "tail hidden while collapsed")
 h.assert_truthy(render.toggle_tool_at_cursor(lb, lwin), "toggle expands")
 ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
