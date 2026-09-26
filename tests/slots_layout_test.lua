@@ -158,7 +158,7 @@ local five = slots.compute_layout({
   min_h = 6,
 })
 h.assert_eq(five[1].row, five[2].row, "master and first sat share top")
-h.assert_eq(five[2].col, five[1].col + five[1].width + 1, "sat abuts master (gap=1 for shared border)")
+h.assert_eq(five[2].col, five[1].col + five[1].width + 2, "sat abuts master (gap=2 independent borders)")
 local max_row = 0
 for id = 2, 6 do
   if five[id].row > max_row then
