@@ -5,9 +5,12 @@ M.opts = {
   window = {
     width = 1.0,
     height = 1.0,
-    border = "none",
-    layout = "full",
+    border = "rounded",
+    --- "full" = edge-to-edge opaque; "float" = inset translucent overlay
+    layout = "float",
     min_width = 56,
+    --- 0–100; only applied when layout is "float"
+    winblend = 18,
   },
   keys = {
     toggle = "<leader>ai",
@@ -28,6 +31,10 @@ M.opts = {
     next_message = "]]",
     prev_message = "[[",
   },
+  --- Global summon/hide (M1 primary float). Independent of keys.toggle.
+  summon_key = "<C-Space>",
+  --- On VimEnter: start RPC in background (no UI); notify when ready.
+  bootstrap = true,
   write_on_accept = true,
   rpc_timeout = 30,
   busy_submit = "steer", -- "steer" | "followUp" when agent is streaming

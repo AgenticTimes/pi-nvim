@@ -33,7 +33,7 @@ Neovim-native frontend for [pi](https://github.com/earendil-works/pi) coding age
 
 | Command | Action |
 |---------|--------|
-| `:Pi` | Toggle chat UI |
+| `:Pi` | Toggle chat UI (`<C-Space>` / `<leader>ai`) |
 | `:PiStop` | Abort agent (`require("pi").interrupt()` / `stop()`) |
 | `:PiCompact [instructions]` | Compact session context |
 | `:PiAutoCompact` | Toggle auto-compaction (`SPC a U`) |
@@ -48,7 +48,9 @@ Neovim-native frontend for [pi](https://github.com/earendil-works/pi) coding age
 | `:PiAcceptAll` / `:PiRejectAll` | Accept / reject all pending |
 | `:PiSlash` | Pick slash command |
 
-On first open (`,ai`), if `resume_last = true` (default), switches to the newest session for the current cwd and fills the chat from history. `,aI` / `:PiNewSession` always starts fresh.
+On Neovim start (`bootstrap = true`), pi starts in the background with no UI; when ready it notifies `pi ready · <C-Space>`. `<C-Space>` (and `<leader>ai`) toggles a translucent fullscreen float (`window.layout = "float"`). Hiding the float does not stop the agent.
+
+On first open, if `resume_last = true` (default), switches to the newest session for the current cwd and fills the chat from history. `,aI` / `:PiNewSession` always starts fresh.
 
 In review buffers: `a`/`r` accept/reject file · `A`/`R` accept/reject all · `ah`/`rh` hunk · `]f`/`[f` next/prev file · `q` close (returns to chat when queue empties).
 

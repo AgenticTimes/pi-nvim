@@ -13,6 +13,8 @@ local hydrate_opts ---@type table|nil
 local pending_hydrate_path ---@type string|nil
 local skip_switch_hydrate = false
 local HYDRATE_ID = "hydrate-msgs"
+local ready_notified = false
+local bootstrap_done = false
 --- After interrupt: re-send abort if turn starts in this window (ns, vim.uv.hrtime).
 local abort_guard_until = 0
 local abort_seq = 0
@@ -227,6 +229,13 @@ local function on_event(ev)
     pcall(function()
       require("pi.ui").refresh_title()
     end)
+    if not ready_notified then
+      ready_notified = true
+      local key = require("pi.config").opts.summon_key or "<C-Space>"
+      vim.schedule(function()
+        vim.notify(string.format("pi ready · %s", key), vim.log.levels.INFO)
+      end)
+    end
   end
 
   if ev.type == "response" and ev.command == "set_session_name" and ev.success then
@@ -418,6 +427,15 @@ function M.ensure_started(opts)
       end
     end, 200)
   end
+end
+
+--- Start RPC without opening UI (M1 bootstrap). Safe to call repeatedly.
+function M.bootstrap()
+  if bootstrap_done and require("pi.client").is_running() then
+    return
+  end
+  bootstrap_done = true
+  M.ensure_started()
 end
 
 function M.refresh_state()

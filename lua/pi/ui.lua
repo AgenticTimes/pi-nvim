@@ -48,15 +48,30 @@ local function chrome_rows()
   return cmd + status + spare
 end
 
---- Chat fills the editor to the right of the todo sidebar
+--- Chat fills the editor to the right of the todo sidebar.
+--- layout "float": slight inset + rounded border (translucent primary).
 local function chat_geometry()
   local side = M.sidebar_width()
+  local wopts = config.opts.window or {}
+  local layout = wopts.layout or "float"
+  local chrome = chrome_rows()
+  if layout == "float" then
+    local margin = 1
+    local border = wopts.border or "rounded"
+    return {
+      width = math.max(20, vim.o.columns - side - 2 * margin),
+      height = math.max(8, vim.o.lines - chrome - 2 * margin),
+      row = margin,
+      col = side + margin,
+      border = border,
+    }
+  end
   return {
     width = math.max(20, vim.o.columns - side),
-    height = math.max(8, vim.o.lines - chrome_rows()),
+    height = math.max(8, vim.o.lines - chrome),
     row = 0,
     col = side,
-    border = "none",
+    border = wopts.border or "none",
   }
 end
 
@@ -91,9 +106,16 @@ local function configure_chat_win(win)
   vim.wo[win].breakindent = true
   vim.wo[win].showbreak = "↪ "
   vim.wo[win].signcolumn = "no"
-  -- Opaque: global NormalFloat is often transparent (theme), which shows the editor through
   pcall(function()
     vim.wo[win].winhl = "Normal:PiChatNormal,NormalFloat:PiChatNormal,FloatBorder:PiChatBorder"
+  end)
+  local blend = 0
+  local wopts = config.opts.window or {}
+  if (wopts.layout or "float") == "float" then
+    blend = tonumber(wopts.winblend) or 18
+  end
+  pcall(function()
+    vim.wo[win].winblend = blend
   end)
   pcall(function()
     vim.wo[win].smoothscroll = true

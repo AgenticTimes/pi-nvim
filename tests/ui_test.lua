@@ -12,6 +12,16 @@ package.loaded["pi.render"] = nil
 package.loaded["pi.input"] = nil
 package.loaded["pi.config"] = nil
 
+require("pi.config").setup({
+  bootstrap = false,
+  summon_key = "",
+  window = { layout = "full", border = "none", winblend = 0 },
+})
+-- ensure (deep_extend can leave surprises in headless reloads)
+require("pi.config").opts.window.layout = "full"
+require("pi.config").opts.window.border = "none"
+require("pi.config").opts.window.winblend = 0
+
 local ui = require("pi.ui")
 ui.open()
 h.assert_truthy(ui.is_open(), "open")

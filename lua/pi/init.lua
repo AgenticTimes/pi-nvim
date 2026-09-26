@@ -2,7 +2,8 @@ local M = {}
 
 function M.setup(opts)
   require("pi.config").setup(opts)
-  local keys = require("pi.config").opts.keys
+  local cfg = require("pi.config").opts
+  local keys = cfg.keys
   if keys.toggle then
     vim.keymap.set({ "n", "x" }, keys.toggle, function()
       local mode = vim.fn.mode()
@@ -11,6 +12,25 @@ function M.setup(opts)
       end
       require("pi").toggle()
     end, { desc = "pi: toggle UI" })
+  end
+  local summon = cfg.summon_key
+  if summon and summon ~= "" then
+    -- normal/visual only: insert <C-Space> is commonly nvim-cmp complete
+    vim.keymap.set({ "n", "x" }, summon, function()
+      require("pi").toggle()
+    end, { desc = "pi: summon / hide" })
+  end
+  if cfg.bootstrap then
+    vim.api.nvim_create_autocmd("VimEnter", {
+      once = true,
+      callback = function()
+        vim.schedule(function()
+          pcall(function()
+            require("pi.runtime").bootstrap()
+          end)
+        end)
+      end,
+    })
   end
 end
 
