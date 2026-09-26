@@ -892,6 +892,43 @@ function M.primary_client()
   return s.client
 end
 
+--- Make sure the primary slot's RPC job is alive (restart satellites if needed).
+---@return table|nil client
+function M.ensure_primary_job()
+  local p = M.primary() or M.ensure_default()
+  if not p then
+    return nil
+  end
+  local client = p.is_default and default_client() or p.client
+  if client.is_running() then
+    return client
+  end
+  if p.is_default then
+    -- Default job: runtime.ensure_started starts the singleton.
+    return client
+  end
+  local ok, err = pcall(function()
+    require("pi.runtime").start_job(client, {
+      on_event = function(ev)
+        satellite_on_event(p, ev)
+      end,
+    })
+  end)
+  if not ok then
+    vim.notify("pi: failed to restart slot #" .. tostring(p.id) .. ": " .. tostring(err), vim.log.levels.ERROR)
+    return nil
+  end
+  if p.id == primary_id then
+    bind_primary(p)
+  else
+    bind_satellite(p)
+  end
+  pcall(function()
+    client.send({ type = "get_state", id = "slot-restart-" .. tostring(p.id) })
+  end)
+  return client
+end
+
 function M.primary_chat_buf()
   local s = M.primary()
   if s and s.chat_buf and vim.api.nvim_buf_is_valid(s.chat_buf) then
@@ -1040,6 +1077,7 @@ function M.set_primary(id)
     return false
   end
   if primary_id == id then
+    pcall(M.ensure_primary_job)
     return true
   end
   local old = M.primary()
@@ -1048,6 +1086,7 @@ function M.set_primary(id)
   end
   primary_id = id
   bind_primary(slot)
+  pcall(M.ensure_primary_job)
   require("pi.ui").adopt_chat_buf(slot.chat_buf)
   if visible then
     M.apply_layout()

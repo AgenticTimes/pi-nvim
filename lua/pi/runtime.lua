@@ -443,8 +443,20 @@ function M.ensure_started(opts)
   pcall(function()
     require("pi.slots").ensure_default()
   end)
-  local client = require("pi.client")
+  -- Always target the primary slot's client (may be a satellite job).
+  local client = M.rpc_client()
   if client.is_running() then
+    return
+  end
+  local primary = nil
+  pcall(function()
+    primary = require("pi.slots").primary()
+  end)
+  -- Satellite primary: restart that job (do not confuse with singleton).
+  if primary and not primary.is_default then
+    pcall(function()
+      require("pi.slots").ensure_primary_job()
+    end)
     return
   end
   local cwd = opts.cwd or vim.fn.getcwd()
@@ -462,7 +474,7 @@ function M.ensure_started(opts)
     schedule_resume(cwd)
   elseif opts.resume_path and opts.resume_path ~= "" then
     vim.defer_fn(function()
-      if require("pi.client").is_running() then
+      if M.rpc_client().is_running() then
         M.switch_session(opts.resume_path)
       end
     end, 200)
@@ -492,18 +504,40 @@ end
 function M.prompt(message, opts)
   opts = opts or {}
   M.ensure_started()
+  pcall(function()
+    require("pi.slots").ensure_primary_job()
+  end)
+  local client = M.rpc_client()
+  if not client.is_running() then
+    vim.notify("pi: RPC not running (try :Pi or a+ again)", vim.log.levels.ERROR)
+    return
+  end
   local session = require("pi.session")
   local payload = { type = "prompt", message = message }
-  if session.is_busy() then
+  -- Busy check: prefer primary slot status when multi-slot
+  local busy = session.is_busy()
+  pcall(function()
+    local p = require("pi.slots").primary()
+    if p and not p.is_default then
+      busy = p.status == "busy" or p.status == "streaming"
+    end
+  end)
+  if busy then
     local mode = opts.streamingBehavior or require("pi.config").opts.busy_submit or "steer"
     payload.streamingBehavior = mode
   elseif opts.streamingBehavior then
     payload.streamingBehavior = opts.streamingBehavior
   end
-  M.rpc_client().send(payload)
-  -- Optimistic busy: agent_start can lag; keep statusline visible immediately.
-  if not session.is_busy() then
+  client.send(payload)
+  -- Optimistic busy
+  if not busy then
     session.set_status("streaming")
+    pcall(function()
+      local p = require("pi.slots").primary()
+      if p then
+        p.status = "busy"
+      end
+    end)
   end
 end
 
