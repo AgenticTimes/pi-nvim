@@ -9,8 +9,9 @@ M.opts = {
     --- "full" = edge-to-edge opaque; "float" = inset translucent overlay
     layout = "float",
     min_width = 56,
-    --- 0–100; only applied when layout is "float"
-    winblend = 18,
+    --- 0–100; only applied when layout is "float". 0 = opaque (hides
+    --- file explorer / buffers behind the agent UI).
+    winblend = 0,
   },
   keys = {
     toggle = "<leader>ai",

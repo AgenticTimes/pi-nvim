@@ -107,12 +107,12 @@ local function configure_chat_win(win)
   vim.wo[win].showbreak = "↪ "
   vim.wo[win].signcolumn = "no"
   pcall(function()
-    vim.wo[win].winhl = "Normal:PiChatNormal,NormalFloat:PiChatNormal,FloatBorder:PiChatBorder"
+    vim.wo[win].winhl = "Normal:PiChatNormal,NormalFloat:PiChatNormal,EndOfBuffer:PiChatNormal,FloatBorder:PiChatBorder"
   end)
   local blend = 0
   local wopts = config.opts.window or {}
   if (wopts.layout or "float") == "float" then
-    blend = tonumber(wopts.winblend) or 18
+    blend = tonumber(wopts.winblend) or 0
   end
   pcall(function()
     vim.wo[win].winblend = blend

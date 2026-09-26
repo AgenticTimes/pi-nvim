@@ -693,14 +693,19 @@ local function configure_win(win, slot, focused)
   vim.wo[win].wrap = true
   vim.wo[win].linebreak = true
   vim.wo[win].signcolumn = "no"
-  local base = tonumber((require("pi.config").opts.window or {}).winblend) or 18
-  local blend = focused and math.max(0, base - 6) or math.min(40, base + 12)
+  local base = tonumber((require("pi.config").opts.window or {}).winblend) or 0
+  -- Multi-slot must stay opaque: any winblend lets neo-tree/explorer bleed through.
+  local blend = 0
+  if base > 0 and #slots <= 1 then
+    blend = focused and math.max(0, base - 6) or math.min(40, base + 12)
+  end
   pcall(function()
     vim.wo[win].winblend = blend
   end)
   local border_hl = border_hl_name(slot.id, focused)
   pcall(function()
-    vim.wo[win].winhl = "Normal:PiChatNormal,NormalFloat:PiChatNormal,FloatBorder:" .. border_hl
+    vim.wo[win].winhl = "Normal:PiChatNormal,NormalFloat:PiChatNormal,EndOfBuffer:PiChatNormal,FloatBorder:"
+      .. border_hl
   end)
 end
 
