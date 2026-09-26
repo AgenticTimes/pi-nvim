@@ -55,7 +55,7 @@ h.assert_truthy(lay2[2].focused, "promoted focused")
 h.assert_truthy(lay2[2].width > lay2[1].width, "promoted is master")
 h.assert_truthy(lay2[1].col > lay2[2].col, "old primary moves to stack")
 
--- as slots fill, master shrinks to make room
+-- as slots fill, master (largest) shrinks; stack widens (not the reverse)
 local few = slots.compute_layout({
   cols = 120,
   lines = 50,
@@ -73,6 +73,28 @@ local many = slots.compute_layout({
   margin = 1,
 })
 h.assert_truthy(many[1].width < few[1].width, "master shrinks when more slots")
-h.assert_truthy(many[2].width > few[2].width, "stack widens when more slots")
+-- stack column width comes from master; individual sat width may split across cols
+h.assert_truthy(many[1].width + many[2].width <= few[1].width + few[2].width + 2, "total width conserved")
+
+-- cramped height: steal width from master (multi-col stack), keep sat height readable
+local cramped = slots.compute_layout({
+  cols = 120,
+  lines = 28,
+  chrome = 2,
+  ids = { 1, 2, 3, 4, 5 },
+  primary = 1,
+  margin = 1,
+})
+local roomy = slots.compute_layout({
+  cols = 120,
+  lines = 60,
+  chrome = 2,
+  ids = { 1, 2, 3, 4, 5 },
+  primary = 1,
+  margin = 1,
+})
+h.assert_truthy(cramped[1].width < roomy[1].width, "cramped: master narrower (space for stack)")
+local min_sat_h = math.min(cramped[2].height, cramped[3].height, cramped[4].height, cramped[5].height)
+h.assert_truthy(min_sat_h >= 6, "cramped: sats keep readable height, not crushed")
 
 print("OK slots_layout_test")

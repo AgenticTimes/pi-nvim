@@ -69,21 +69,46 @@ function M.compute_layout(opts)
   end
   local gap = 1
   local n = #sats
-  -- More satellites → wider stack / narrower master (room for the new slot).
-  local stack_frac = math.min(0.52, 0.26 + n * 0.06)
-  local stack_w = math.max(18, math.floor(usable_w * stack_frac))
-  local master_w = math.max(20, usable_w - stack_w - gap)
-  local cell_h = math.max(4, math.floor((usable_h - (n - 1) * gap) / n))
+  local min_sat_h = 8
+  local min_sat_w = 22
+  local min_master_w = 22
+  -- Prefer keeping each satellite readable: if a single column would crush
+  -- cell height, add stack columns and steal that width from the master
+  -- (largest window) — never from other satellites.
+  local stack_cols = 1
+  local stack_rows = n
+  while stack_cols < 3 do
+    stack_rows = math.ceil(n / stack_cols)
+    local trial_h = math.floor((usable_h - (stack_rows - 1) * gap) / stack_rows)
+    if trial_h >= min_sat_h then
+      break
+    end
+    stack_cols = stack_cols + 1
+    stack_rows = math.ceil(n / stack_cols)
+  end
+  -- Base stack share grows with sat count; multi-col needs more width from master.
+  local stack_frac = math.min(0.62, 0.24 + n * 0.07 + (stack_cols - 1) * 0.12)
+  local stack_w = math.max(min_sat_w * stack_cols + gap * (stack_cols - 1), math.floor(usable_w * stack_frac))
+  local master_w = math.max(min_master_w, usable_w - stack_w - gap)
+  stack_w = usable_w - master_w - gap
+  local col_w = math.max(min_sat_w, math.floor((stack_w - (stack_cols - 1) * gap) / stack_cols))
+  local cell_h = math.max(5, math.floor((usable_h - (stack_rows - 1) * gap) / stack_rows))
   for i, id in ipairs(sats) do
-    local row = margin + (i - 1) * (cell_h + gap)
+    local col_i = (i - 1) % stack_cols
+    local row_i = math.floor((i - 1) / stack_cols)
+    local row = margin + row_i * (cell_h + gap)
     local h = cell_h
-    if i == n then
-      h = math.max(4, usable_h - (row - margin))
+    if row_i == stack_rows - 1 then
+      h = math.max(5, usable_h - (row - margin))
+    end
+    local w = col_w
+    if col_i == stack_cols - 1 then
+      w = math.max(min_sat_w, stack_w - col_i * (col_w + gap))
     end
     out[id] = {
       row = row,
-      col = margin + master_w + gap,
-      width = stack_w,
+      col = margin + master_w + gap + col_i * (col_w + gap),
+      width = w,
       height = h,
       border = "rounded",
       zindex = 48,
@@ -549,42 +574,11 @@ function M.ensure_default()
   return slot
 end
 
---- Free a slot when at capacity: oldest idle satellite first, else oldest non-primary.
-local function make_room()
-  if #slots < max_slots() then
-    return true
-  end
-  local function evict(want_idle_only)
-    for _, s in ipairs(slots) do
-      if not s.is_default and s.id ~= primary_id then
-        local idle = s.status == "idle" or s.status == nil
-        if not want_idle_only or idle then
-          local eid = s.id
-          M.close(eid)
-          vim.notify(
-            string.format("pi: closed #%d to make room (max %d)", eid, max_slots()),
-            vim.log.levels.INFO
-          )
-          return true
-        end
-      end
-    end
-    return false
-  end
-  if evict(true) then
-    return #slots < max_slots()
-  end
-  if evict(false) then
-    return #slots < max_slots()
-  end
-  return #slots < max_slots()
-end
-
 --- Create a new satellite slot (new pi job). Returns slot or nil, err.
 function M.create()
   M.ensure_default()
-  if #slots >= max_slots() and not make_room() then
-    return nil, "max slots (" .. tostring(max_slots()) .. ")"
+  if #slots >= max_slots() then
+    return nil, "max slots (" .. tostring(max_slots()) .. "); close one with a_"
   end
   local id = next_id
   next_id = next_id + 1
@@ -619,7 +613,7 @@ function M.create()
   pcall(function()
     client.send({ type = "get_state", id = "slot-state-" .. tostring(id) })
   end)
-  -- Shrink the master float and stack the new slot on the right
+  -- Shrink the master (largest) float; new slot joins the right stack
   if visible or require("pi.ui").is_open() then
     visible = true
     local p = M.primary()
@@ -724,6 +718,7 @@ function M.apply_layout()
     return
   end
   ensure_slot_hl()
+  ensure_slot_hl_autocmd()
   local layout = M.compute_layout({
     cols = vim.o.columns,
     lines = vim.o.lines,
@@ -776,15 +771,13 @@ function M.show()
     bind_primary(p)
     require("pi.ui").adopt_chat_buf(p.chat_buf)
   end
-  -- ui.open paints primary buf; apply_layout resizes + opens satellites
+  -- ui.open paints primary buf; apply_layout applies per-slot colored borders
   require("pi.ui").open()
   if p then
     p.win = require("pi.ui").chat_win()
   end
   visible = true
-  if #slots > 1 then
-    M.apply_layout()
-  end
+  M.apply_layout()
 end
 
 function M.hide()

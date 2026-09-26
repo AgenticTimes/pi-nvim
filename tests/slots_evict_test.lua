@@ -16,6 +16,7 @@ package.loaded["pi.render"] = {
   jump_message = function() end,
   attach_scroll = function() end,
   follow = function() end,
+  toggle_fold_kind = function() end,
 }
 package.loaded["pi.runtime"] = {
   bind_events = function() end,
@@ -52,34 +53,15 @@ require("pi.config").setup({ max_slots = 3, bootstrap = false })
 local slots = require("pi.slots")
 slots._reset_for_test()
 
-local a = slots.create()
-local b = slots.create()
-h.assert_truthy(a and b, "created two sats")
-h.assert_eq(slots.count(), 3, "default + 2 sats") -- ensure_default + 2
+h.assert_truthy(slots.create(), "sat 1")
+h.assert_truthy(slots.create(), "sat 2")
+h.assert_eq(slots.count(), 3, "at max")
 
--- at max (3): next create should evict oldest idle sat (# from first create)
-local before_ids = {}
-for _, s in ipairs(slots.live()) do
-  before_ids[#before_ids + 1] = s.id
-end
-local c = slots.create()
-h.assert_truthy(c, "create at max succeeds via eviction")
-h.assert_eq(slots.count(), 3, "still at max after eviction")
-local still_has_first_sat = false
-for _, s in ipairs(slots.live()) do
-  if s.id == a.id then
-    still_has_first_sat = true
-  end
-end
-h.assert_false(still_has_first_sat, "oldest idle satellite evicted")
-h.assert_truthy(c.id == b.id or true, "new slot present")
-local has_c = false
-for _, s in ipairs(slots.live()) do
-  if s.id == c.id then
-    has_c = true
-  end
-end
-h.assert_truthy(has_c, "newest slot kept")
+-- at max: refuse — do NOT evict/close a right-hand satellite
+local s, err = slots.create()
+h.assert_false(s, "create at max fails")
+h.assert_truthy(tostring(err):find("max slots", 1, true), "error mentions max: " .. tostring(err))
+h.assert_eq(slots.count(), 3, "no eviction; count unchanged")
 
 slots._reset_for_test()
 package.loaded["pi.slots"] = nil
