@@ -20,6 +20,7 @@ package.loaded["pi.statusline"] = {
 }
 package.loaded["pi.session"] = nil
 package.loaded["pi.runtime"] = nil
+package.loaded["pi.slots"] = nil
 package.loaded["pi"] = nil
 
 require("pi.config").setup({})

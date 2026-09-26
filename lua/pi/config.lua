@@ -30,11 +30,17 @@ M.opts = {
     focus_cycle = "<Tab>",
     next_message = "]]",
     prev_message = "[[",
+    --- M2 multi-slot
+    slot_new = "<leader>a+",
+    slot_close = "<leader>a_",
+    slot_cycle = "<leader>a>",
   },
   --- Global summon/hide (M1 primary float). Independent of keys.toggle.
   summon_key = "<C-Space>",
   --- On VimEnter: start RPC in background (no UI); notify when ready.
   bootstrap = true,
+  --- Max concurrent slots (1 primary + satellites).
+  max_slots = 4,
   write_on_accept = true,
   rpc_timeout = 30,
   busy_submit = "steer", -- "steer" | "followUp" when agent is streaming

@@ -21,8 +21,20 @@ local abort_seq = 0
 local hard_kill_armed = false
 local ABORT_CHECK_ID = "abort-check"
 
+--- Active RPC client (primary slot when multi-slot; else singleton).
+function M.rpc_client()
+  local ok, slots = pcall(require, "pi.slots")
+  if ok and slots.primary_client then
+    local c = slots.primary_client()
+    if c then
+      return c
+    end
+  end
+  return require("pi.client")
+end
+
 local function send_abort_rpc()
-  local client = require("pi.client")
+  local client = M.rpc_client()
   if not client.is_running() then
     return false
   end
@@ -36,7 +48,7 @@ end
 local function force_stop_rpc(reason)
   hard_kill_armed = false
   abort_guard_until = 0
-  local client = require("pi.client")
+  local client = M.rpc_client()
   if client.is_running() then
     client.stop()
   end
@@ -128,7 +140,7 @@ local function on_event(ev)
     end
     local resp = require("pi.host_tools").handle_ui_request(ev)
     if resp then
-      require("pi.client").send(resp)
+      M.rpc_client().send(resp)
       require("pi.review").auto_show()
     end
   end
@@ -361,6 +373,31 @@ local function build_cmd(opts)
   return cmd
 end
 
+--- Attach full runtime event handler (primary slot / default client).
+function M.bind_events(client)
+  client = client or require("pi.client")
+  client.set_on_event(on_event)
+end
+
+--- Start an isolated client job (satellite slots).
+function M.start_job(client, opts)
+  opts = opts or {}
+  if client.is_running() then
+    return client.job_id
+  end
+  local cwd = opts.cwd or vim.fn.getcwd()
+  local cmd = opts.cmd or build_cmd(opts)
+  client.start({
+    cmd = cmd,
+    cwd = cwd,
+    on_event = opts.on_event,
+  })
+  if opts.on_event then
+    client.set_on_event(opts.on_event)
+  end
+  return client.job_id
+end
+
 --- Fire-and-forget get_messages → paint chat (never blocks UI)
 function M.hydrate_chat(opts)
   opts = opts or {}
@@ -403,6 +440,9 @@ end
 
 function M.ensure_started(opts)
   opts = opts or {}
+  pcall(function()
+    require("pi.slots").ensure_default()
+  end)
   local client = require("pi.client")
   if client.is_running() then
     return
@@ -435,11 +475,14 @@ function M.bootstrap()
     return
   end
   bootstrap_done = true
+  pcall(function()
+    require("pi.slots").ensure_default()
+  end)
   M.ensure_started()
 end
 
 function M.refresh_state()
-  local client = require("pi.client")
+  local client = M.rpc_client()
   if not client.is_running() then
     return
   end
@@ -457,7 +500,7 @@ function M.prompt(message, opts)
   elseif opts.streamingBehavior then
     payload.streamingBehavior = opts.streamingBehavior
   end
-  require("pi.client").send(payload)
+  M.rpc_client().send(payload)
   -- Optimistic busy: agent_start can lag; keep statusline visible immediately.
   if not session.is_busy() then
     session.set_status("streaming")

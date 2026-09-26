@@ -310,6 +310,20 @@ function M.chat_buf()
   return b
 end
 
+--- Multi-slot: point UI at another chat buffer/window (primary).
+function M.adopt_chat_buf(buf)
+  if buf and vim.api.nvim_buf_is_valid(buf) then
+    bufs.chat = buf
+  end
+end
+
+function M.adopt_chat_win(win, buf)
+  if buf then
+    M.adopt_chat_buf(buf)
+  end
+  wins.chat = win
+end
+
 function M.input_buf()
   if bufs.input and vim.api.nvim_buf_is_valid(bufs.input) then
     -- re-bind keys each open so Enter/Shift no longer submit after config updates

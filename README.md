@@ -48,7 +48,7 @@ Neovim-native frontend for [pi](https://github.com/earendil-works/pi) coding age
 | `:PiAcceptAll` / `:PiRejectAll` | Accept / reject all pending |
 | `:PiSlash` | Pick slash command |
 
-On Neovim start (`bootstrap = true`), pi starts in the background with no UI; when ready it notifies `pi ready · <C-Space>`. `<C-Space>` (and `<leader>ai`) toggles a translucent fullscreen float (`window.layout = "float"`). Hiding the float does not stop the agent.
+On Neovim start (`bootstrap = true`), pi starts in the background with no UI; when ready it notifies `pi ready · <C-Space>`. `<C-Space>` (and `<leader>ai`) toggles the slot layout (translucent float; `window.layout = "float"`). Hiding does not stop jobs. Multi-slot (M2): `<leader>a+` new parallel agent, `<leader>a_` close slot, `<leader>a>` cycle primary; satellites sit on a top row, primary below.
 
 On first open, if `resume_last = true` (default), switches to the newest session for the current cwd and fills the chat from history. `,aI` / `:PiNewSession` always starts fresh.
 

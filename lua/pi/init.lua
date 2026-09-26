@@ -20,6 +20,24 @@ function M.setup(opts)
       require("pi").toggle()
     end, { desc = "pi: summon / hide" })
   end
+  if keys.slot_new then
+    vim.keymap.set("n", keys.slot_new, function()
+      local s, err = require("pi.slots").create()
+      if not s then
+        vim.notify("pi: " .. tostring(err), vim.log.levels.WARN)
+      end
+    end, { desc = "pi: new slot" })
+  end
+  if keys.slot_close then
+    vim.keymap.set("n", keys.slot_close, function()
+      require("pi.slots").close()
+    end, { desc = "pi: close slot" })
+  end
+  if keys.slot_cycle then
+    vim.keymap.set("n", keys.slot_cycle, function()
+      require("pi.slots").cycle_primary(1)
+    end, { desc = "pi: cycle primary slot" })
+  end
   if cfg.bootstrap then
     vim.api.nvim_create_autocmd("VimEnter", {
       once = true,
@@ -35,7 +53,7 @@ function M.setup(opts)
 end
 
 function M.toggle()
-  return require("pi.ui").toggle()
+  return require("pi.slots").toggle_visible()
 end
 
 function M.stop()

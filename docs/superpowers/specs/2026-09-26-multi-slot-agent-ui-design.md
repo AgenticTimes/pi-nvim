@@ -39,9 +39,10 @@
 - `<C-Space>` toggles one **fullscreen translucent** float (primary only).
 - Jobs survive hide; interrupt/compact still work.
 
-### M2 — multi-slot parallel
-- N pi jobs; new/close slot; primary + satellites layout.
-- Slot-local abort/prompt; status dots on satellites.
+### M2 — multi-slot parallel ✅
+- N pi jobs (`pi.client.new`); `pi.slots` create/close/cycle; primary + satellites layout.
+- `<C-Space>` → `slots.toggle_visible()`; `<leader>a+` / `a_` / `a>` new/close/cycle.
+- Slot-local abort/prompt on primary; status dots on satellites.
 
 ### M3 — multi-backend
 - Stable Backend interface; second agent adapter.
