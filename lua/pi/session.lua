@@ -197,6 +197,9 @@ function M.on_event(ev)
   elseif ev.type == "response" and ev.command == "set_thinking_level" and ev.data then
     state.thinking = ev.data.level or ev.data
   end
+  pcall(function()
+    require("pi.slots").on_primary_event(ev)
+  end)
 end
 
 return M

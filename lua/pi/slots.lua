@@ -8,6 +8,9 @@ local M = {}
 ---@field win integer|nil
 ---@field status string
 ---@field is_default boolean
+---@field session_name string|nil
+---@field goal string|nil user objective (title layer 1)
+---@field activity string|nil current action (title layer 2)
 
 local slots = {} ---@type PiSlot[]
 local primary_id ---@type integer|nil
@@ -204,23 +207,6 @@ end
 
 local focus_autocmd ---@type integer|nil
 
-local function session_label(slot)
-  local name = slot.session_name
-  if (not name or name == "") and slot.id == primary_id then
-    pcall(function()
-      name = require("pi.session").get().session_name
-    end)
-  end
-  if not name or name == "" then
-    return nil
-  end
-  name = tostring(name):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
-  if #name > 28 then
-    name = name:sub(1, 27) .. "…"
-  end
-  return name
-end
-
 -- Distinct border colors per slot id (cycle). Focus = brighter + bold.
 local SLOT_COLORS = {
   { idle = 0x7aa2f7, focus = 0x89b4fa }, -- blue
@@ -282,15 +268,156 @@ local function border_for(slot, focused)
   }
 end
 
-local function title_for(slot)
+local function session_label(slot)
+  local name = slot.session_name
+  if (not name or name == "") and slot.id == primary_id then
+    pcall(function()
+      name = require("pi.session").get().session_name
+    end)
+  end
+  if not name or name == "" then
+    return nil
+  end
+  name = tostring(name):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+  if #name > 28 then
+    name = name:sub(1, 27) .. "…"
+  end
+  return name
+end
+
+local function clip(s, n)
+  s = tostring(s or ""):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+  if s == "" then
+    return ""
+  end
+  if vim.fn.strdisplaywidth(s) > n then
+    while #s > 0 and vim.fn.strdisplaywidth(s) > n - 1 do
+      s = s:sub(1, -2)
+    end
+    return s .. "…"
+  end
+  return s
+end
+
+--- First non-empty line of user text → goal (layer 1).
+local function goal_from_prompt(text)
+  if type(text) ~= "string" then
+    return nil
+  end
+  for line in (text .. "\n"):gmatch("(.-)\n") do
+    local t = line:gsub("^%s+", ""):gsub("%s+$", "")
+    if t ~= "" and not t:match("^@") then
+      return clip(t, 48)
+    end
+  end
+  return clip(text, 48)
+end
+
+local function activity_from_tool(name, args)
+  name = tostring(name or "tool")
+  local detail = ""
+  if type(args) == "table" then
+    detail = args.command
+      or args.cmd
+      or args.path
+      or args.file_path
+      or args.filePath
+      or args.pattern
+      or args.query
+      or args.url
+      or args.prompt
+      or ""
+    if detail == "" and args.arguments and type(args.arguments) == "table" then
+      local a = args.arguments
+      detail = a.command or a.path or a.file_path or a.pattern or a.query or ""
+    end
+  elseif type(args) == "string" then
+    detail = args
+  end
+  detail = clip(tostring(detail), 36)
+  if detail ~= "" then
+    return name .. ": " .. detail
+  end
+  return name
+end
+
+--- Update slot.activity from an RPC event (layer 2).
+local function apply_activity(slot, ev)
+  if not ev or not ev.type then
+    return
+  end
+  if ev.type == "tool_execution_start" then
+    slot.activity = activity_from_tool(ev.toolName, ev.args or ev.input or ev.toolArguments)
+  elseif ev.type == "tool_execution_end" then
+    local name = ev.toolName or (slot.activity and slot.activity:match("^([^:]+)")) or "tool"
+    if ev.isError then
+      slot.activity = tostring(name) .. " ✗"
+    else
+      slot.activity = tostring(name) .. " ✓"
+    end
+  elseif ev.type == "agent_start" or ev.type == "turn_start" then
+    if not slot.activity or slot.activity == "" or slot.activity:match("✓$") or slot.activity:match("✗$") then
+      slot.activity = "thinking"
+    end
+  elseif ev.type == "message_update" then
+    if not slot.activity or slot.activity == "thinking" or slot.activity:match("✓$") then
+      slot.activity = "replying"
+    end
+  elseif ev.type == "compaction_start" then
+    slot.activity = "compacting"
+  elseif ev.type == "agent_end" or ev.type == "agent_settled" or ev.type == "compaction_end" then
+    slot.activity = nil
+  end
+end
+
+--- Two-layer float title: `#id · goal · activity`.
+--- Layer 1 = user goal (or session name); layer 2 = what it's doing now.
+---@param slot PiSlot
+---@param max_w integer|nil
+function M.format_title(slot, max_w)
   local busy = slot.status == "busy" or slot.status == "streaming"
   local dot = busy and "●" or "○"
-  local name = session_label(slot)
-  local focus = slot.id == primary_id and " · focus" or ""
-  if name then
-    return string.format(" %s #%d · %s%s ", dot, slot.id, name, focus)
+  local parts = { string.format("%s #%d", dot, slot.id) }
+  local goal = slot.goal
+  if not goal or goal == "" then
+    goal = session_label(slot)
   end
-  return string.format(" %s #%d%s ", dot, slot.id, focus)
+  if goal and goal ~= "" then
+    parts[#parts + 1] = goal
+  end
+  local act = slot.activity
+  if (not act or act == "") and busy then
+    act = "Working"
+  end
+  if act and act ~= "" then
+    parts[#parts + 1] = act
+  end
+  if slot.id == primary_id then
+    parts[#parts + 1] = "focus"
+  end
+  local title = " " .. table.concat(parts, " · ") .. " "
+  max_w = max_w or (slot.win and vim.api.nvim_win_is_valid(slot.win) and vim.api.nvim_win_get_width(slot.win)) or 60
+  max_w = math.max(20, max_w - 2)
+  if vim.fn.strdisplaywidth(title) > max_w then
+    -- Prefer keeping id + activity; shrink goal first
+    if goal and #parts >= 3 then
+      local budget = max_w - vim.fn.strdisplaywidth(string.format(" %s #%d ·  · %s ", dot, slot.id, act or ""))
+      budget = math.max(8, budget)
+      parts[2] = clip(goal, budget)
+      title = " " .. table.concat(parts, " · ") .. " "
+    end
+    if vim.fn.strdisplaywidth(title) > max_w then
+      title = clip(title, max_w)
+      if not title:match(" $") then
+        title = title .. " "
+      end
+    end
+  end
+  return title
+end
+
+local function title_for(slot)
+  return M.format_title(slot)
 end
 
 local function refresh_slot_title(slot)
@@ -304,12 +431,38 @@ local function refresh_slot_title(slot)
   end
 end
 
+--- Record user objective on the active (primary) slot.
+function M.note_goal(text, id)
+  local slot = id and find(id) or M.primary()
+  if not slot then
+    return
+  end
+  local g = goal_from_prompt(text)
+  if g and g ~= "" then
+    slot.goal = g
+    refresh_slot_title(slot)
+  end
+end
+
+--- Primary client events (same activity rules as satellites).
+function M.on_primary_event(ev)
+  local p = M.primary()
+  if not p then
+    return
+  end
+  apply_activity(p, ev)
+  refresh_slot_title(p)
+end
+
 local function apply_slot_state(slot, data)
   if type(data) ~= "table" then
     return
   end
   if data.sessionName and data.sessionName ~= "" then
     slot.session_name = data.sessionName
+    if not slot.goal or slot.goal == "" then
+      slot.goal = clip(data.sessionName, 48)
+    end
   end
   if data.isStreaming then
     slot.status = "busy"
@@ -471,7 +624,7 @@ local function satellite_on_event(slot, ev)
   if ev.type == "agent_start" or ev.type == "turn_start" then
     slot.status = "busy"
     activity = true
-  elseif ev.type == "message_update" or ev.type == "tool_execution_start" then
+  elseif ev.type == "message_update" or ev.type == "tool_execution_start" or ev.type == "tool_execution_end" then
     -- Receiving a response: treat as working even if agent_start was missed
     if slot.status ~= "busy" then
       slot.status = "busy"
@@ -486,6 +639,7 @@ local function satellite_on_event(slot, ev)
       activity = true
     end
   end
+  apply_activity(slot, ev)
   pcall(function()
     require("pi.render").on_event(slot.chat_buf, ev)
   end)
