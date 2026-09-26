@@ -160,6 +160,21 @@ local function refresh()
   ensure_hl()
   local text = M.text()
   vim.g.pi_busy = text
+  -- Multi-slot: title already shows ●/activity. Overlay spans the full pane
+  -- width and paints over the shared border + neighbor titles → looks "错位".
+  local multi = false
+  pcall(function()
+    multi = require("pi.slots").count() > 1
+  end)
+  if multi then
+    clear_pi_winbars()
+    close_overlay()
+    pcall(function()
+      require("lualine").refresh({ place = { "statusline" } })
+    end)
+    pcall(vim.cmd.redrawstatus)
+    return
+  end
   if started_at then
     paint_chat_winbar(text, true)
     paint_overlay(text)

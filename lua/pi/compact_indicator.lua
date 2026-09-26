@@ -70,15 +70,15 @@ function M.update(opts)
     relative = "editor",
     width = width,
     height = 1,
-    row = 1,
+    row = 0,
     col = col,
     style = "minimal",
     border = "rounded",
     focusable = false,
-    zindex = 50,
+    zindex = 80,
   })
   vim.wo[M.floating_win].winhl = "Normal:PiCompactFloat,NormalNC:PiCompactFloat"
-  vim.wo[M.floating_win].winblend = 20
+  vim.wo[M.floating_win].winblend = 0
 end
 
 function M.refresh()
