@@ -129,8 +129,8 @@ render.on_event(lb, {
   isError = false,
 })
 local ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
-h.assert_truthy(ljoin:find("za expand", 1, true), "collapse marker present: " .. ljoin)
-h.assert_false(ljoin:find("line7", 1, true), "tail hidden while collapsed")
+h.assert_truthy(ljoin:find("line7", 1, true), "default expanded shows tail: " .. ljoin)
+h.assert_false(ljoin:find("%+.*lines", 1, false), "no collapse body marker while expanded")
 local lwin = vim.api.nvim_open_win(lb, true, {
   relative = "editor",
   width = 60,
@@ -145,13 +145,19 @@ for i, l in ipairs(vim.api.nvim_buf_get_lines(lb, 0, -1, false)) do
     break
   end
 end
+h.assert_truthy(render.toggle_tool_at_cursor(lb, lwin), "toggle collapses")
+ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
+h.assert_truthy(ljoin:find("ftc", 1, true), "collapse marker ftc: " .. ljoin)
+h.assert_false(ljoin:find("line7", 1, true), "tail hidden while collapsed")
 h.assert_truthy(render.toggle_tool_at_cursor(lb, lwin), "toggle expands")
 ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
 h.assert_truthy(ljoin:find("line7", 1, true), "tail visible when expanded")
-h.assert_false(ljoin:find("za expand", 1, true), "no marker when expanded")
-h.assert_truthy(render.toggle_tool_at_cursor(lb, lwin), "toggle collapses")
+h.assert_truthy(render.toggle_fold_kind(lb, "tool"), "ftc folds all tools")
 ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
-h.assert_truthy(ljoin:find("za expand", 1, true), "marker restored")
+h.assert_truthy(ljoin:find("ftc", 1, true), "ftc folded")
+h.assert_truthy(render.toggle_fold_kind(lb, "tool"), "ftc expands all tools")
+ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
+h.assert_truthy(ljoin:find("line7", 1, true), "ftc expanded again")
 pcall(vim.api.nvim_win_close, lwin, true)
 
 -- assistant text has no role header (OpenCode-style)

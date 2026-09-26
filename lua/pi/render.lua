@@ -36,6 +36,7 @@ local split_md_cells = Rtext.split_md_cells
 local is_md_sep_row = Rtext.is_md_sep_row
 local align_md_table = Rtext.align_md_table
 local collapse_tool_lines = Rtools.collapse_tool_lines
+local collapse_thinking_lines = Rtools.collapse_thinking_lines
 
 -- pending tools by toolCallId → { name, detail, line }
 local pending = {}
@@ -266,31 +267,46 @@ local function push_bubble(buf, b)
 end
 
 --- Top rule with the role label tucked into its left corner:
---- `▌╭─ user ───────╮` / `▏╭┄ thinking ┄┄┄╮` / `▌┌─ toolcall ───┐`
+--- `▌╭─ user ───────╮` / `▏╭┄ thinking ┄ ftk ┄╮` / `▌┌─ toolcall ── ftc ─┐`
 --- Left bar is virt_text (same column as the box), not signcolumn — signs sit
 --- outside the text area and made `▌` stick out past `┌`/`└`.
 --- Horizontal fill uses display width so ambiwidth=double / CJK does not blow
 --- past the window and leave the right corner unclosed.
-local function top_rule(style, inner)
+---@param fold_hint string|nil e.g. "ftc" / "ftk" shown on the right of the top rule
+local function top_rule(style, inner, fold_hint)
   local chunks = {}
   if style.bar and style.bar ~= "" then
     chunks[#chunks + 1] = { style.bar, style.bar_hl }
   end
   local label = style.label
+  local hint = ""
+  if fold_hint and fold_hint ~= "" then
+    hint = " " .. fold_hint .. " "
+  end
   if not label or label == "" then
     chunks[#chunks + 1] = { style.tl .. rep_to_width(style.h, inner) .. style.tr, style.border_hl }
     return chunks
   end
   local head = style.h .. " "
-  local tail = " "
-  local used = disp_w(head .. label .. tail)
+  local mid = " "
+  local used = disp_w(head .. label .. mid .. hint)
   if used >= inner then
-    chunks[#chunks + 1] = { style.tl .. rep_to_width(style.h, inner) .. style.tr, style.border_hl }
-    return chunks
+    -- too narrow for hint — keep label only
+    used = disp_w(head .. label .. mid)
+    if used >= inner then
+      chunks[#chunks + 1] = { style.tl .. rep_to_width(style.h, inner) .. style.tr, style.border_hl }
+      return chunks
+    end
+    hint = ""
   end
+  local fill = inner - used
   chunks[#chunks + 1] = { style.tl .. head, style.border_hl }
   chunks[#chunks + 1] = { label, style.label_hl }
-  chunks[#chunks + 1] = { tail .. rep_to_width(style.h, inner - used) .. style.tr, style.border_hl }
+  chunks[#chunks + 1] = { mid .. rep_to_width(style.h, fill), style.border_hl }
+  if hint ~= "" then
+    chunks[#chunks + 1] = { hint, style.label_hl }
+  end
+  chunks[#chunks + 1] = { style.tr, style.border_hl }
   return chunks
 end
 
@@ -305,7 +321,7 @@ local function bottom_rule(style, inner)
 end
 
 --- Paint one boxed row: left bar + bg + side borders + top/bottom rule
-local function paint_row(buf, ns, row, line, style, inner, avail, is_first, is_last)
+local function paint_row(buf, ns, row, line, style, inner, avail, is_first, is_last, fold_hint)
   local _, side_w = style_chrome(style)
   local left = {}
   if style.bar and style.bar ~= "" then
@@ -331,7 +347,7 @@ local function paint_row(buf, ns, row, line, style, inner, avail, is_first, is_l
   })
   if is_first then
     pcall(vim.api.nvim_buf_set_extmark, buf, ns, row, 0, {
-      virt_lines = { top_rule(style, inner) },
+      virt_lines = { top_rule(style, inner, fold_hint) },
       virt_lines_above = true,
       priority = 12,
     })
@@ -343,6 +359,26 @@ local function paint_row(buf, ns, row, line, style, inner, avail, is_first, is_l
       priority = 12,
     })
   end
+end
+
+local function fold_hint_for(b)
+  if not b or not b.style then
+    return nil
+  end
+  if b.style.bar_hl == "PiToolBar" and b.tool_full then
+    return "ftc"
+  end
+  if b.style.bar_hl == "PiThinkBar" and b.fold_full then
+    return "ftk"
+  end
+  -- streaming thinking (not yet finalized) still hints ftk
+  if b.style.bar_hl == "PiThinkBar" then
+    return "ftk"
+  end
+  if b.style.bar_hl == "PiToolBar" then
+    return "ftc"
+  end
+  return nil
 end
 
 --- Redraw one box from scratch. O(box rows) per call: only streaming boxes repaint
@@ -358,9 +394,10 @@ local function paint_box(b)
   end
   local inner, avail = bubble_inner_width(buf, b.style)
   local lines = vim.api.nvim_buf_get_lines(buf, b.start0, b.end0, false)
+  local hint = fold_hint_for(b)
   for i, line in ipairs(lines) do
     local row = b.start0 + i - 1
-    paint_row(buf, b.ns, row, line, b.style, inner, avail, row == b.start0, i == #lines)
+    paint_row(buf, b.ns, row, line, b.style, inner, avail, row == b.start0, i == #lines, hint)
   end
 end
 
@@ -426,6 +463,20 @@ local function commit_box(buf, style, start0, end0)
   push_bubble(buf, b)
   paint_box(b)
   return b
+end
+
+--- Finalize a thinking box for fold support (default expanded).
+local function attach_thinking_fold(buf, b)
+  if not b or not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  if b.end0 <= b.start0 then
+    return
+  end
+  b.fold_full = vim.api.nvim_buf_get_lines(buf, b.start0, b.end0, false)
+  b.fold_expanded = true
+  b.fold_kind = "thinking"
+  paint_box(b)
 end
 
 --- Box that is still streaming: not registered until it has at least one line
@@ -945,7 +996,8 @@ function M.append_thinking(buf, text)
     append_wrapped_line(buf, line, STYLES.thinking)
   end
   in_thinking_body = false
-  commit_box(buf, STYLES.thinking, start0, vim.api.nvim_buf_line_count(buf))
+  local b = commit_box(buf, STYLES.thinking, start0, vim.api.nvim_buf_line_count(buf))
+  attach_thinking_fold(buf, b)
 end
 
 local function line_count(buf)
@@ -1040,7 +1092,7 @@ local function upsert_tool_end(buf, name, args, ok, err)
   then
     last_tool.count = last_tool.count + 1
     full = tool_block(buf, name, args, ok, last_tool.count, err)
-    local expanded = last_tool.expanded and true or false
+    local expanded = last_tool.expanded ~= false
     local display = collapse_tool_lines(full, expanded, false)
     with_write(buf, function()
       vim.api.nvim_buf_set_lines(buf, last_tool.start_line - 1, last_tool.start_line - 1 + last_tool.n, false, display)
@@ -1052,7 +1104,8 @@ local function upsert_tool_end(buf, name, args, ok, err)
     schedule_follow(buf)
     return
   end
-  local display = collapse_tool_lines(full, false, has_err)
+  -- Default expanded (not folded); ftc folds when wanted
+  local display = collapse_tool_lines(full, true, has_err)
   local first = append_tool_lines(buf, display)
   last_tool = {
     key = key,
@@ -1061,9 +1114,9 @@ local function upsert_tool_end(buf, name, args, ok, err)
     start_line = first,
     n = #display,
     full = full,
-    expanded = false,
+    expanded = true,
   }
-  attach_tool_payload(buf, full, false, has_err)
+  attach_tool_payload(buf, full, true, has_err)
   if has_err then
     mark_error_lines(buf, first, #display)
   end
@@ -1116,6 +1169,73 @@ function M.jump_message(buf, win, dir)
   end
 end
 
+--- Apply expand/collapse to one foldable box; shifts later boxes by delta.
+local function apply_box_expand(buf, target, expanded)
+  local full, display
+  if target.tool_full then
+    full = target.tool_full
+    display = collapse_tool_lines(full, expanded, target.tool_has_err)
+    if #collapse_tool_lines(full, false, target.tool_has_err) >= #full and not expanded then
+      return false
+    end
+  elseif target.fold_full and target.fold_kind == "thinking" then
+    full = target.fold_full
+    display = collapse_thinking_lines(full, expanded)
+    if #collapse_thinking_lines(full, false) >= #full and not expanded then
+      return false
+    end
+  else
+    return false
+  end
+  local old_end = target.end0
+  with_write(buf, function()
+    vim.api.nvim_buf_set_lines(buf, target.start0, target.end0, false, display)
+  end)
+  local new_n = #display
+  local delta = new_n - (old_end - target.start0)
+  if target.tool_full then
+    target.tool_expanded = expanded
+  else
+    target.fold_expanded = expanded
+  end
+  target.end0 = target.start0 + new_n
+  if delta ~= 0 then
+    for _, b in ipairs(bubbles[buf] or {}) do
+      if b ~= target and b.start0 >= old_end then
+        b.start0 = b.start0 + delta
+        b.end0 = b.end0 + delta
+      end
+    end
+    if think_box and think_box.buf == buf and think_box.box and think_box.box ~= target and think_box.box.start0 >= old_end then
+      think_box.box.start0 = think_box.box.start0 + delta
+      think_box.box.end0 = think_box.box.end0 + delta
+    end
+    if asst_box and asst_box.buf == buf and asst_box.box.start0 >= old_end then
+      asst_box.box.start0 = asst_box.box.start0 + delta
+      asst_box.box.end0 = asst_box.box.end0 + delta
+    end
+    if tool_box and tool_box.buf == buf and tool_box.box and tool_box.box ~= target and tool_box.box.start0 >= old_end then
+      tool_box.box.start0 = tool_box.box.start0 + delta
+      tool_box.box.end0 = tool_box.box.end0 + delta
+    end
+    if last_tool and last_tool.start_line then
+      local last_start0 = last_tool.start_line - 1
+      if last_start0 == target.start0 then
+        last_tool.n = new_n
+        last_tool.expanded = expanded
+        last_tool.full = full
+      elseif last_start0 >= old_end then
+        last_tool.start_line = last_tool.start_line + delta
+      end
+    end
+  end
+  paint_box(target)
+  if target.tool_has_err then
+    mark_error_lines(buf, target.start0 + 1, new_n)
+  end
+  return true
+end
+
 --- Toggle collapsed/expanded tool box under the cursor. Returns true if handled.
 function M.toggle_tool_at_cursor(buf, win)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
@@ -1142,54 +1262,53 @@ function M.toggle_tool_at_cursor(buf, win)
   if not target then
     return false
   end
-  local full = target.tool_full
-  local preview = collapse_tool_lines(full, false, target.tool_has_err)
-  if #preview >= #full then
+  local preview = collapse_tool_lines(target.tool_full, false, target.tool_has_err)
+  if #preview >= #target.tool_full then
     return false
   end
-  local expanded = not target.tool_expanded
-  local display = collapse_tool_lines(full, expanded, target.tool_has_err)
-  local old_end = target.end0
-  with_write(buf, function()
-    vim.api.nvim_buf_set_lines(buf, target.start0, target.end0, false, display)
+  return apply_box_expand(buf, target, not target.tool_expanded)
+end
+
+--- Toggle fold for all toolcall (`ftc`) or thinking (`ftk`) boxes in a buffer.
+--- If any of that kind is expanded → fold all; otherwise expand all.
+---@param kind "tool"|"thinking"
+function M.toggle_fold_kind(buf, kind)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return false
+  end
+  local boxes = {}
+  for _, b in ipairs(bubbles[buf] or {}) do
+    if kind == "tool" and b.tool_full then
+      boxes[#boxes + 1] = b
+    elseif kind == "thinking" and b.fold_full and b.fold_kind == "thinking" then
+      boxes[#boxes + 1] = b
+    end
+  end
+  if #boxes == 0 then
+    return false
+  end
+  local any_expanded = false
+  for _, b in ipairs(boxes) do
+    if kind == "tool" and b.tool_expanded then
+      any_expanded = true
+      break
+    end
+    if kind == "thinking" and b.fold_expanded then
+      any_expanded = true
+      break
+    end
+  end
+  local want_expanded = not any_expanded
+  table.sort(boxes, function(a, c)
+    return a.start0 > c.start0
   end)
-  local new_n = #display
-  -- collapse/expand changes the line count: shift every later box and the
-  -- streaming handles so the registry stays in sync with the buffer
-  local delta = new_n - (old_end - target.start0)
-  target.tool_expanded = expanded
-  target.end0 = target.start0 + new_n
-  if delta ~= 0 then
-    for _, b in ipairs(bubbles[buf] or {}) do
-      if b ~= target and b.start0 >= old_end then
-        b.start0 = b.start0 + delta
-        b.end0 = b.end0 + delta
-      end
-    end
-    if think_box and think_box.buf == buf and think_box.box.start0 >= old_end then
-      think_box.box.start0 = think_box.box.start0 + delta
-      think_box.box.end0 = think_box.box.end0 + delta
-    end
-    if asst_box and asst_box.buf == buf and asst_box.box.start0 >= old_end then
-      asst_box.box.start0 = asst_box.box.start0 + delta
-      asst_box.box.end0 = asst_box.box.end0 + delta
-    end
-    if last_tool and last_tool.start_line then
-      local last_start0 = last_tool.start_line - 1
-      if last_start0 == target.start0 then
-        last_tool.n = new_n
-        last_tool.expanded = expanded
-        last_tool.full = full
-      elseif last_start0 >= old_end then
-        last_tool.start_line = last_tool.start_line + delta
-      end
+  local ok = false
+  for _, b in ipairs(boxes) do
+    if apply_box_expand(buf, b, want_expanded) then
+      ok = true
     end
   end
-  paint_box(target)
-  if target.tool_has_err then
-    mark_error_lines(buf, target.start0 + 1, new_n)
-  end
-  return true
+  return ok
 end
 
 --- Open an answer box (#N label) before the first text_delta of a turn.
@@ -1475,6 +1594,10 @@ function M.on_event(buf, ev)
     elseif a.type == "thinking_end" then
       streaming_thinking = false
       in_thinking_body = false
+      if think_box and think_box.buf == buf and think_box.box then
+        grow_box(think_box.box)
+        attach_thinking_fold(buf, think_box.box)
+      end
       close_thinking_box()
       schedule_follow(buf)
     elseif a.type == "error" then
@@ -1656,7 +1779,7 @@ local function paint_messages(buf, messages)
         if parts.tool_calls and #parts.tool_calls > 0 then
           for _, call in ipairs(parts.tool_calls) do
             local full = tool_block(buf, call.name, call.args, nil, 1)
-            local display = collapse_tool_lines(full, false, false)
+            local display = collapse_tool_lines(full, true, false)
             append_tool_lines(buf, display)
             attach_tool_payload(buf, full, false, false)
           end

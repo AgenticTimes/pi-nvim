@@ -765,6 +765,12 @@ local function map_ui_keys()
   vim.keymap.set("n", "za", function()
     require("pi.render").toggle_tool_at_cursor(chat, wins.chat)
   end, vim.tbl_extend("force", opts_c, { desc = "pi: toggle tool expand" }))
+  vim.keymap.set("n", "ftc", function()
+    require("pi.render").toggle_fold_kind(chat, "tool")
+  end, vim.tbl_extend("force", opts_c, { desc = "pi: fold/unfold toolcalls" }))
+  vim.keymap.set("n", "ftk", function()
+    require("pi.render").toggle_fold_kind(chat, "thinking")
+  end, vim.tbl_extend("force", opts_c, { desc = "pi: fold/unfold thinking" }))
 
   local tab = k.focus_cycle or "<Tab>"
   vim.keymap.set("n", tab, function()

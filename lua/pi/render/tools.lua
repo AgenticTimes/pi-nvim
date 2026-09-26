@@ -23,7 +23,7 @@ local function clip(s)
   return vim.fn.strcharpart(s, 0, MAX_ARG_CHARS) .. " …"
 end
 
---- Collapsed tool box: header + a few body lines; expand via za / <CR>.
+--- Collapsed tool box: header + a few body lines; expand via ftc / za / <CR>.
 function M.collapse_tool_lines(full, expanded, has_err)
   full = full or {}
   if expanded or #full <= 1 then
@@ -38,7 +38,22 @@ function M.collapse_tool_lines(full, expanded, has_err)
   for i = 1, keep do
     out[i] = full[i]
   end
-  out[#out + 1] = string.format("  … +%d lines  za expand", #full - keep)
+  out[#out + 1] = string.format("  … +%d lines  ftc", #full - keep)
+  return out
+end
+
+--- Collapsed thinking box (default expanded; ftk toggles).
+function M.collapse_thinking_lines(full, expanded)
+  full = full or {}
+  if expanded or #full <= 2 then
+    return full
+  end
+  local keep = 2
+  local out = {}
+  for i = 1, keep do
+    out[i] = full[i]
+  end
+  out[#out + 1] = string.format("  … +%d lines  ftk", #full - keep)
   return out
 end
 
