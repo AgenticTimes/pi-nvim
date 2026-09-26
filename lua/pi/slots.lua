@@ -275,6 +275,109 @@ local function layout_ids()
   return out
 end
 
+--- True when the chat buffer has real transcript (not just the empty header).
+local function slot_has_content(s)
+  if not s then
+    return false
+  end
+  if (s.goal and s.goal ~= "") or (s.activity and s.activity ~= "") then
+    return true
+  end
+  if s.session_name and s.session_name ~= "" then
+    return true
+  end
+  local buf = s.chat_buf
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return false
+  end
+  local n = vim.api.nvim_buf_line_count(buf)
+  if n <= 1 then
+    local line = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or ""
+    return line ~= "" and not line:match("^#?%s*pi%s")
+  end
+  return n > 2
+end
+
+--- Priority for layout placement: busy > has content > idle.
+---@param s PiSlot|nil
+---@return integer
+function M.layout_priority(s)
+  if not s then
+    return 0
+  end
+  if slot_busy(s) then
+    return 3
+  end
+  if slot_has_content(s) then
+    return 2
+  end
+  return 1
+end
+
+--- Sort ids: higher priority first (busy/content → top-left), then lower id.
+---@param ids integer[]
+---@param priority_of fun(id: integer): integer
+---@return integer[]
+function M.sort_ids_by_priority(ids, priority_of)
+  local scored = {}
+  for _, id in ipairs(ids) do
+    scored[#scored + 1] = { id = id, p = priority_of(id) or 0 }
+  end
+  table.sort(scored, function(a, b)
+    if a.p ~= b.p then
+      return a.p > b.p
+    end
+    return a.id < b.id
+  end)
+  local out = {}
+  for _, x in ipairs(scored) do
+    out[#out + 1] = x.id
+  end
+  return out
+end
+
+local function rank_shown_ids(shown)
+  return M.sort_ids_by_priority(shown, function(id)
+    return M.layout_priority(find(id))
+  end)
+end
+
+--- Prefer a busy slot as the left master; keep focus primary if it is busy.
+---@param ranked integer[]
+---@param preferred integer|nil
+---@return integer|nil
+local function pick_layout_primary(ranked, preferred)
+  if #ranked == 0 then
+    return nil
+  end
+  if preferred then
+    local s = find(preferred)
+    if s and not s.parked and slot_busy(s) then
+      return preferred
+    end
+  end
+  for _, id in ipairs(ranked) do
+    local s = find(id)
+    if s and slot_busy(s) then
+      return id
+    end
+  end
+  -- Prefer contentful over empty idle for the large pane
+  for _, id in ipairs(ranked) do
+    local s = find(id)
+    if s and slot_has_content(s) then
+      return id
+    end
+  end
+  if preferred then
+    local s = find(preferred)
+    if s and not s.parked then
+      return preferred
+    end
+  end
+  return ranked[1]
+end
+
 local function close_slot_win(slot)
   if slot.win and vim.api.nvim_win_is_valid(slot.win) then
     pcall(vim.api.nvim_win_close, slot.win, true)
@@ -348,9 +451,20 @@ local function ensure_slot_hl_autocmd()
   })
 end
 
----@param slot PiSlot
----@param focused boolean
----@param nbr { N?: boolean, S?: boolean, E?: boolean, W?: boolean }|nil
+local resize_autocmd ---@type integer|nil
+local function ensure_resize_autocmd()
+  if resize_autocmd then
+    return
+  end
+  resize_autocmd = vim.api.nvim_create_autocmd("VimResized", {
+    callback = function()
+      if visible and #slots > 1 then
+        M.apply_layout()
+      end
+    end,
+  })
+end
+
 --- Float border array. With gap=1, neighbors share one screen row/col; the
 --- southern window owns that row (its titled top). Northern windows omit the
 --- bottom so they don't paint over the title below.
@@ -827,6 +941,14 @@ local function satellite_on_event(slot, ev)
     pcall(function()
       require("pi.statusline").repaint()
     end)
+    -- Re-tile so newly busy/idle slots move to top-left priority
+    if visible then
+      vim.schedule(function()
+        if visible then
+          M.apply_layout()
+        end
+      end)
+    end
   end
   if activity then
     maybe_auto_promote(slot)
@@ -1238,6 +1360,7 @@ function M.apply_layout()
   end)
   ensure_slot_hl()
   ensure_slot_hl_autocmd()
+  ensure_resize_autocmd()
   -- Close parked floats first
   for _, slot in ipairs(slots) do
     if slot.parked then
@@ -1248,15 +1371,32 @@ function M.apply_layout()
   if #shown == 0 then
     return
   end
-  local layout_primary = primary_id
-  if not layout_primary or (find(layout_primary) and find(layout_primary).parked) then
-    layout_primary = shown[1]
+  -- Busy / contentful slots → left master + top of the satellite stack
+  local ranked = rank_shown_ids(shown)
+  local layout_primary = pick_layout_primary(ranked, primary_id)
+  if not layout_primary then
+    return
+  end
+  -- Sync focus when master should follow a running agent
+  if layout_primary ~= primary_id then
+    local cur = primary_id and find(primary_id) or nil
+    local want = find(layout_primary)
+    if want and slot_busy(want) and (not cur or not slot_busy(cur)) then
+      M.set_primary(layout_primary)
+      return
+    end
+  end
+  local ordered = { layout_primary }
+  for _, id in ipairs(ranked) do
+    if id ~= layout_primary then
+      ordered[#ordered + 1] = id
+    end
   end
   local layout = M.compute_layout({
     cols = vim.o.columns,
     lines = vim.o.lines,
     chrome = chrome_rows(),
-    ids = shown,
+    ids = ordered,
     primary = layout_primary,
   })
   local ui = require("pi.ui")
