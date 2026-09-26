@@ -291,13 +291,46 @@ local function top_rule(style, inner, fold_hint)
   local mid = " "
   local used = disp_w(head .. label .. mid .. hint)
   if used >= inner then
-    -- too narrow for hint — keep label only
-    used = disp_w(head .. label .. mid)
-    if used >= inner then
-      chunks[#chunks + 1] = { style.tl .. rep_to_width(style.h, inner) .. style.tr, style.border_hl }
-      return chunks
+    -- Prefer keeping the fold hint over the role label when the pane is narrow
+    local short_hint = hint
+    if fold_hint and fold_hint:find("fold", 1, true) then
+      short_hint = " ftt "
+      if style.bar_hl == "PiThinkBar" then
+        short_hint = " ftk "
+      end
+    elseif fold_hint and fold_hint:find("expand", 1, true) then
+      short_hint = " ftt "
+      if style.bar_hl == "PiThinkBar" then
+        short_hint = " ftk "
+      end
     end
-    hint = ""
+    used = disp_w(head .. label .. mid .. short_hint)
+    if used < inner then
+      hint = short_hint
+    else
+      used = disp_w(head .. short_hint)
+      if used < inner then
+        label = nil
+        hint = short_hint
+      else
+        used = disp_w(head .. label .. mid)
+        if used >= inner then
+          chunks[#chunks + 1] = { style.tl .. rep_to_width(style.h, inner) .. style.tr, style.border_hl }
+          return chunks
+        end
+        hint = ""
+      end
+    end
+  end
+  if not label or label == "" then
+    local fill = math.max(0, inner - disp_w(head .. (hint ~= "" and hint or "")))
+    chunks[#chunks + 1] = { style.tl .. head, style.border_hl }
+    chunks[#chunks + 1] = { rep_to_width(style.h, fill), style.border_hl }
+    if hint ~= "" then
+      chunks[#chunks + 1] = { hint, style.label_hl }
+    end
+    chunks[#chunks + 1] = { style.tr, style.border_hl }
+    return chunks
   end
   local fill = inner - used
   chunks[#chunks + 1] = { style.tl .. head, style.border_hl }
@@ -1553,12 +1586,16 @@ function M.on_event(buf, ev)
 
   if ev.type == "tool_execution_end" then
     local id = ev.toolCallId or ev.id
-    local meta = (id and pending[id]) or { name = ev.toolName }
+    local meta = (id and pending[id]) or {}
     if id then
       pending[id] = nil
     end
+    -- Fall back to end-event args when start was missed (common in multi-slot /
+    -- late subscribe); otherwise only "⚙ name ✓" is painted and ftt can't fold.
+    local name = meta.name or ev.toolName
+    local args = meta.args or ev.args or ev.input or ev.toolArguments
     local err = ev.isError and result_text(ev.result) or nil
-    upsert_tool_end(buf, meta.name or ev.toolName, meta.args, not ev.isError, err)
+    upsert_tool_end(buf, name, args, not ev.isError, err)
     return
   end
 
