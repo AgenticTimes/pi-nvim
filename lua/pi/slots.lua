@@ -342,40 +342,39 @@ local function rank_shown_ids(shown)
   end)
 end
 
---- Prefer a busy slot as the left master; keep focus primary if it is busy.
----@param ranked integer[]
----@param preferred integer|nil
----@return integer|nil
-local function pick_layout_primary(ranked, preferred)
-  if #ranked == 0 then
-    return nil
-  end
-  if preferred then
-    local s = find(preferred)
-    if s and not s.parked and slot_busy(s) then
-      return preferred
+--- Build id list for compute_layout: focus primary first (left master), then
+--- remaining slots ranked busy/content → top of satellite stack.
+--- Never steals primary — input always follows the window the user focused.
+---@param shown integer[]
+---@param primary integer|nil
+---@return integer[] ordered
+---@return integer layout_primary
+local function order_for_layout(shown, primary)
+  local layout_primary = primary
+  local primary_ok = false
+  if layout_primary then
+    for _, id in ipairs(shown) do
+      if id == layout_primary then
+        primary_ok = true
+        break
+      end
     end
   end
-  for _, id in ipairs(ranked) do
-    local s = find(id)
-    if s and slot_busy(s) then
-      return id
+  if not primary_ok then
+    layout_primary = rank_shown_ids(shown)[1]
+  end
+  local rest = {}
+  for _, id in ipairs(shown) do
+    if id ~= layout_primary then
+      rest[#rest + 1] = id
     end
   end
-  -- Prefer contentful over empty idle for the large pane
-  for _, id in ipairs(ranked) do
-    local s = find(id)
-    if s and slot_has_content(s) then
-      return id
-    end
+  local ranked_rest = rank_shown_ids(rest)
+  local ordered = { layout_primary }
+  for _, id in ipairs(ranked_rest) do
+    ordered[#ordered + 1] = id
   end
-  if preferred then
-    local s = find(preferred)
-    if s and not s.parked then
-      return preferred
-    end
-  end
-  return ranked[1]
+  return ordered, layout_primary
 end
 
 local function close_slot_win(slot)
@@ -941,7 +940,7 @@ local function satellite_on_event(slot, ev)
     pcall(function()
       require("pi.statusline").repaint()
     end)
-    -- Re-tile so newly busy/idle slots move to top-left priority
+    -- Re-tile so newly busy/idle sats move within the stack (does not steal focus)
     if visible then
       vim.schedule(function()
         if visible then
@@ -950,9 +949,8 @@ local function satellite_on_event(slot, ev)
       end)
     end
   end
-  if activity then
-    maybe_auto_promote(slot)
-  end
+  -- Do NOT maybe_auto_promote here: a satellite going busy must not yank
+  -- primary away while the user is typing in another (idle) slot.
 end
 
 local function bind_primary(slot)
@@ -1371,26 +1369,11 @@ function M.apply_layout()
   if #shown == 0 then
     return
   end
-  -- Busy / contentful slots → left master + top of the satellite stack
-  local ranked = rank_shown_ids(shown)
-  local layout_primary = pick_layout_primary(ranked, primary_id)
+  -- Left master = user focus (primary). Busy/content only float to top of the
+  -- satellite stack — never steal primary or prompts would go to the wrong agent.
+  local ordered, layout_primary = order_for_layout(shown, primary_id)
   if not layout_primary then
     return
-  end
-  -- Sync focus when master should follow a running agent
-  if layout_primary ~= primary_id then
-    local cur = primary_id and find(primary_id) or nil
-    local want = find(layout_primary)
-    if want and slot_busy(want) and (not cur or not slot_busy(cur)) then
-      M.set_primary(layout_primary)
-      return
-    end
-  end
-  local ordered = { layout_primary }
-  for _, id in ipairs(ranked) do
-    if id ~= layout_primary then
-      ordered[#ordered + 1] = id
-    end
   end
   local layout = M.compute_layout({
     cols = vim.o.columns,
@@ -1404,7 +1387,7 @@ function M.apply_layout()
     if not slot.parked then
       local g = layout[slot.id]
       if g then
-        local focused = slot.id == primary_id or slot.id == layout_primary
+        local focused = slot.id == primary_id
         slot._nbr = g.nbr
         local cfg = {
           relative = "editor",

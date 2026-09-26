@@ -18,23 +18,23 @@ h.assert_eq(ordered[3], 3, "contentful next")
 h.assert_eq(ordered[4], 1, "idle lower id")
 h.assert_eq(ordered[5], 5, "idle higher id last")
 
--- compute_layout places earlier sat ids higher (smaller row) in the stack
+-- User focus stays left master; busy sats only float to top of the right stack.
+-- Simulate: primary=1 (user focused idle), sats ordered busy-first 4,2,3
 local lay = slots.compute_layout({
   cols = 120,
   lines = 50,
   chrome = 2,
-  ids = { 2, 4, 3, 1 }, -- busy-first order as apply_layout would pass
-  primary = 2,
+  ids = { 1, 4, 2, 3 },
+  primary = 1,
   margin = 1,
   min_w = 24,
   min_h = 6,
 })
-h.assert_truthy(lay[2].focused, "busy primary is master")
-h.assert_truthy(lay[2].col < lay[4].col, "master left of sats")
-h.assert_truthy(lay[4].row < lay[3].row, "busy sat above content sat")
-h.assert_truthy(lay[3].row < lay[1].row, "content sat above idle sat")
+h.assert_truthy(lay[1].focused, "user focus remains master")
+h.assert_truthy(lay[1].col < lay[4].col, "master left of sats")
+h.assert_truthy(lay[4].row < lay[2].row, "busier sat higher in stack")
+h.assert_truthy(lay[2].row <= lay[3].row, "busy above content/idle")
 
--- priority helper
 h.assert_eq(slots.layout_priority({ status = "busy" }), 3, "busy rank")
 h.assert_eq(slots.layout_priority({ status = "idle", goal = "x" }), 2, "content rank")
 h.assert_eq(slots.layout_priority({ status = "idle" }), 1, "idle rank")
