@@ -207,4 +207,15 @@ for id = 2, 6 do
 end
 h.assert_truthy(has_ns, "some sats share N/S edge")
 
+-- stacked sat: northern omits bottom so southern title isn't overwritten
+local dummy = { id = 2 }
+local north = slots.border_for(dummy, false, { S = true, W = true })
+h.assert_eq(north[6][1], "", "north omits bottom when nbr.S")
+h.assert_eq(north[5][1], "", "north omits br when nbr.S")
+h.assert_eq(north[7][1], "", "north omits bl when nbr.S")
+local south = slots.border_for(dummy, false, { N = true, W = true })
+h.assert_eq(south[2][1], "─", "south keeps top for title")
+h.assert_eq(south[6][1], "─", "south keeps bottom")
+h.assert_eq(south[1][1], "┼", "south TL junction with N+W")
+
 print("OK slots_layout_test")

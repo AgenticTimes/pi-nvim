@@ -497,10 +497,25 @@ function M.is_fullscreen()
   return fullscreen
 end
 
+--- True when multi-slot owns chat geometry/titles (do not expand primary full-screen).
+local function multi_slot_owns_layout()
+  local ok, slots = pcall(require, "pi.slots")
+  return ok and slots.count() > 1 and slots.is_visible()
+end
+
 --- (Re)place the chat float: full editor minus the todo sidebar; reconfigures
 --- the window and re-applies window options (wrap, signcolumn) on every call.
 local function apply_chat_layout()
   if not M.is_open() then
+    return
+  end
+  -- Multi-slot: slots.apply_layout owns geometry + ○ #N titles. Expanding the
+  -- adopted primary here would cover satellites and wipe their titles.
+  if multi_slot_owns_layout() then
+    pcall(function()
+      require("pi.slots").apply_layout()
+    end)
+    apply_todos_layout()
     return
   end
   local g = chat_geometry()
@@ -808,6 +823,14 @@ function M.cycle_focus()
 end
 
 function M.refresh_title()
+  if multi_slot_owns_layout() then
+    -- Keep slot ○ #N titles; don't replace with singleton "pi chat".
+    pcall(function()
+      require("pi.slots").sync_primary_status()
+      require("pi.slots").refresh_titles()
+    end)
+    return
+  end
   apply_chat_layout()
 end
 

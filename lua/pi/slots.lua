@@ -351,7 +351,14 @@ end
 ---@param slot PiSlot
 ---@param focused boolean
 ---@param nbr { N?: boolean, S?: boolean, E?: boolean, W?: boolean }|nil
-local function border_for(slot, focused, nbr)
+--- Float border array. With gap=1, neighbors share one screen row/col; the
+--- southern window owns that row (its titled top). Northern windows omit the
+--- bottom so they don't paint over the title below.
+---@param slot PiSlot
+---@param focused boolean
+---@param nbr { N?: boolean, S?: boolean, E?: boolean, W?: boolean }|nil
+---@return table
+function M.border_for(slot, focused, nbr)
   local hl = border_hl_name(slot.id, focused)
   nbr = nbr or {}
   local function cell(ch)
@@ -377,21 +384,26 @@ local function border_for(slot, focused, nbr)
   else
     tr = "┐"
   end
-  if nbr.W and nbr.S then
-    bl = "┼"
-  elseif nbr.W then
+  -- Neighbor below owns the shared row for its title — omit our bottom entirely.
+  if nbr.S then
+    return {
+      cell(tl),
+      cell("─"),
+      cell(tr),
+      cell("│"),
+      cell(""), -- br
+      cell(""), -- bottom
+      cell(""), -- bl
+      cell("│"),
+    }
+  end
+  if nbr.W then
     bl = "┴"
-  elseif nbr.S then
-    bl = "├"
   else
     bl = "└"
   end
-  if nbr.E and nbr.S then
-    br = "┼"
-  elseif nbr.E then
+  if nbr.E then
     br = "┴"
-  elseif nbr.S then
-    br = "┤"
   else
     br = "┘"
   end
@@ -405,6 +417,10 @@ local function border_for(slot, focused, nbr)
     cell(bl),
     cell("│"),
   }
+end
+
+local function border_for(slot, focused, nbr)
+  return M.border_for(slot, focused, nbr)
 end
 
 local function session_label(slot)
@@ -567,6 +583,16 @@ local function refresh_slot_title(slot)
       title_pos = "center",
       border = border_for(slot, focused, slot._nbr),
     })
+  end
+end
+
+--- Re-apply ○ #N titles on every visible slot (used when ui.refresh_title would
+--- otherwise stomp them with the singleton "pi chat" title).
+function M.refresh_titles()
+  for _, slot in ipairs(slots) do
+    if not slot.parked then
+      refresh_slot_title(slot)
+    end
   end
 end
 
