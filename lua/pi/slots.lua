@@ -121,13 +121,51 @@ local function place_grid(id_list, row0, col0, w, h, gap, min_w, min_h, primary,
         width = col_widths[c],
         height = ch,
         border = "single",
-        zindex = focused and 52 or 48,
+        -- Above master so shared-edge tees (┬├) paint over master's │
+        zindex = focused and 52 or 50,
         focused = focused,
       }
       x = x + col_widths[c] + gap
       idx = idx + 1
     end
     y = y + ch + gap
+  end
+end
+
+local function rows_overlap(a, b)
+  return a.row < b.row + b.height and b.row < a.row + a.height
+end
+
+local function cols_overlap(a, b)
+  return a.col < b.col + b.width and b.col < a.col + a.width
+end
+
+--- Mark nbr.{N,S,E,W} so borders can share an edge without ┐┌ seams.
+local function annotate_neighbors(out, gap)
+  gap = gap or 1
+  local list = {}
+  for id, g in pairs(out) do
+    g.nbr = { N = false, S = false, E = false, W = false }
+    list[#list + 1] = g
+  end
+  for i = 1, #list do
+    for j = i + 1, #list do
+      local a, b = list[i], list[j]
+      if b.col == a.col + a.width + gap and rows_overlap(a, b) then
+        a.nbr.E = true
+        b.nbr.W = true
+      elseif a.col == b.col + b.width + gap and rows_overlap(a, b) then
+        b.nbr.E = true
+        a.nbr.W = true
+      end
+      if b.row == a.row + a.height + gap and cols_overlap(a, b) then
+        a.nbr.S = true
+        b.nbr.N = true
+      elseif a.row == b.row + b.height + gap and cols_overlap(a, b) then
+        b.nbr.S = true
+        a.nbr.N = true
+      end
+    end
   end
 end
 
@@ -164,10 +202,11 @@ function M.compute_layout(opts)
       col = margin,
       width = usable_w,
       height = usable_h,
-      border = "rounded",
+      border = "single",
       zindex = 52,
       focused = true,
     }
+    annotate_neighbors(out, gap)
     return out
   end
 
@@ -179,8 +218,6 @@ function M.compute_layout(opts)
 
   -- Master + right pack when both sides can keep min width
   if need_stack_w + gap + min_w <= usable_w then
-    -- Few sats: keep a modest stack. Many sats / many cols: steal from master
-    -- down to min_w so vertical+horizontal grain is fully used.
     local steal = math.min(0.78, 0.22 + stack_cols * 0.14 + (n > 4 and (n - 4) * 0.03 or 0))
     local preferred = math.max(need_stack_w, math.floor(usable_w * steal))
     local stack_w = math.min(preferred, usable_w - min_w - gap)
@@ -196,11 +233,13 @@ function M.compute_layout(opts)
       focused = true,
     }
     place_grid(sats, margin, margin + master_w + gap, stack_w, usable_h, gap, min_w, min_h, primary, out)
+    annotate_neighbors(out, gap)
     return out
   end
 
   -- Screen full at min grain: equal grid of every slot (primary is just one cell)
   place_grid(ids, margin, margin, usable_w, usable_h, gap, min_w, min_h, primary, out)
+  annotate_neighbors(out, gap)
   return out
 end
 
@@ -311,18 +350,60 @@ end
 
 ---@param slot PiSlot
 ---@param focused boolean
-local function border_for(slot, focused)
+---@param nbr { N?: boolean, S?: boolean, E?: boolean, W?: boolean }|nil
+local function border_for(slot, focused, nbr)
   local hl = border_hl_name(slot.id, focused)
-  -- Single-line box so adjacent floats share an edge cleanly (gap=1 overlap).
+  nbr = nbr or {}
+  local function cell(ch)
+    return { ch, hl }
+  end
+  -- Shared edges use tee/junction chars so overlapping borders don't show ┐┌ seams.
+  local tl, tr, bl, br
+  if nbr.W and nbr.N then
+    tl = "┼"
+  elseif nbr.W then
+    tl = "┬"
+  elseif nbr.N then
+    tl = "├"
+  else
+    tl = "┌"
+  end
+  if nbr.E and nbr.N then
+    tr = "┼"
+  elseif nbr.E then
+    tr = "┬"
+  elseif nbr.N then
+    tr = "┤"
+  else
+    tr = "┐"
+  end
+  if nbr.W and nbr.S then
+    bl = "┼"
+  elseif nbr.W then
+    bl = "┴"
+  elseif nbr.S then
+    bl = "├"
+  else
+    bl = "└"
+  end
+  if nbr.E and nbr.S then
+    br = "┼"
+  elseif nbr.E then
+    br = "┴"
+  elseif nbr.S then
+    br = "┤"
+  else
+    br = "┘"
+  end
   return {
-    { "┌", hl },
-    { "─", hl },
-    { "┐", hl },
-    { "│", hl },
-    { "┘", hl },
-    { "─", hl },
-    { "└", hl },
-    { "│", hl },
+    cell(tl),
+    cell("─"),
+    cell(tr),
+    cell("│"),
+    cell(br),
+    cell("─"),
+    cell(bl),
+    cell("│"),
   }
 end
 
@@ -484,7 +565,7 @@ local function refresh_slot_title(slot)
     pcall(vim.api.nvim_win_set_config, slot.win, {
       title = title_for(slot),
       title_pos = "center",
-      border = border_for(slot, focused),
+      border = border_for(slot, focused, slot._nbr),
     })
   end
 end
@@ -1021,6 +1102,7 @@ function M.apply_layout()
       local g = layout[slot.id]
       if g then
         local focused = slot.id == primary_id or slot.id == layout_primary
+        slot._nbr = g.nbr
         local cfg = {
           relative = "editor",
           width = g.width,
@@ -1028,7 +1110,7 @@ function M.apply_layout()
           row = g.row,
           col = g.col,
           style = "minimal",
-          border = border_for(slot, focused),
+          border = border_for(slot, focused, g.nbr),
           title = title_for(slot),
           title_pos = "center",
           zindex = g.zindex,

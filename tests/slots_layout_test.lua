@@ -50,8 +50,8 @@ h.assert_eq(lay[1].height, lay[2].height + 1 + lay[3].height, "stack fills maste
 h.assert_truthy(lay[2].col > lay[1].col, "stack to the right of master")
 h.assert_eq(lay[2].col, lay[3].col, "sats same column")
 h.assert_truthy(lay[3].row > lay[2].row, "sats stacked vertically")
-h.assert_eq(lay[1].zindex, 52, "primary z")
-h.assert_eq(lay[2].zindex, 48, "sat z")
+h.assert_eq(lay[1].zindex, 49, "primary z under sats for shared edges")
+h.assert_eq(lay[2].zindex, 50, "sat z")
 
 -- promote: new primary becomes left master
 local lay2 = slots.compute_layout({
@@ -194,5 +194,17 @@ for id = 2, 6 do
 end
 h.assert_eq(last_left, fr_left, "last row starts at stack left")
 h.assert_eq(last_right, fr_right, "last row fills same width as first row (no hole)")
+
+-- neighbor junctions: master touches sats → E/W; stacked sats → N/S
+h.assert_truthy(five[1].nbr and five[1].nbr.E, "master has east neighbor")
+h.assert_truthy(five[2].nbr and five[2].nbr.W, "first sat has west neighbor (master)")
+local has_ns = false
+for id = 2, 6 do
+  if five[id].nbr and (five[id].nbr.N or five[id].nbr.S) then
+    has_ns = true
+    break
+  end
+end
+h.assert_truthy(has_ns, "some sats share N/S edge")
 
 print("OK slots_layout_test")
