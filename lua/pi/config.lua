@@ -36,7 +36,7 @@ M.opts = {
     slot_close = "<leader>a_",
     slot_cycle = "<leader>a>",
     slot_idle = "<leader>a.",
-    --- Prefix for <leader>w1..w9 / w0(=10) → promote that slot id to master
+    --- Promote slot to master: `12<leader>w` or `<leader>w` then digits.
     slot_focus = "<leader>w",
   },
   --- Global summon/hide (M1 primary float). Independent of keys.toggle.

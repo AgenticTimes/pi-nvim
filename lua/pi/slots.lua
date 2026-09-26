@@ -1096,6 +1096,74 @@ function M.focus_by_id(n)
   return M.set_primary(n)
 end
 
+--- Interactive / count-based focus. Prefer `12<leader>w`, or `<leader>w` then digits.
+---@return boolean
+function M.focus_ask()
+  local n = vim.v.count
+  if n and n > 0 then
+    return M.focus_by_id(n)
+  end
+  local digits = ""
+  local function echo()
+    vim.api.nvim_echo({ { "pi → slot #" .. digits .. (digits == "" and "_" or ""), "Question" } }, false, {})
+  end
+  echo()
+  -- First digit: blocking
+  local c = vim.fn.getcharstr()
+  if c == "\x1b" or c == "" then
+    vim.api.nvim_echo({}, false, {})
+    return false
+  end
+  if c == "\r" or c == "\n" then
+    vim.api.nvim_echo({}, false, {})
+    return false
+  end
+  if not c:match("^%d$") then
+    vim.api.nvim_echo({}, false, {})
+    vim.notify("pi: expected slot number", vim.log.levels.WARN)
+    return false
+  end
+  digits = c
+  echo()
+  -- More digits (up to 3) with short timeout so `w` `1` `2` works for #12
+  local max_digits = 3
+  while #digits < max_digits do
+    local got = nil
+    local deadline = vim.uv.hrtime() + 600 * 1000000 -- 600ms
+    while vim.uv.hrtime() < deadline do
+      local code = vim.fn.getchar(0)
+      if code ~= 0 and code ~= nil then
+        got = type(code) == "number" and vim.fn.nr2char(code) or tostring(code)
+        break
+      end
+      vim.wait(20, function()
+        return false
+      end, 20, false)
+    end
+    if not got then
+      break
+    end
+    if got == "\x1b" then
+      vim.api.nvim_echo({}, false, {})
+      return false
+    end
+    if got == "\r" or got == "\n" or got == " " then
+      break
+    end
+    if not got:match("^%d$") then
+      break
+    end
+    digits = digits .. got
+    echo()
+  end
+  vim.api.nvim_echo({}, false, {})
+  local id = tonumber(digits)
+  if not id then
+    return false
+  end
+  return M.focus_by_id(id)
+end
+
 function M.apply_layout()
   if #slots == 0 then
     return
