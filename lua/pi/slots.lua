@@ -128,13 +128,53 @@ end
 
 local focus_autocmd ---@type integer|nil
 
+local function session_label(slot)
+  local name = slot.session_name
+  if (not name or name == "") and slot.id == primary_id then
+    pcall(function()
+      name = require("pi.session").get().session_name
+    end)
+  end
+  if not name or name == "" then
+    return nil
+  end
+  name = tostring(name):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+  if #name > 28 then
+    name = name:sub(1, 27) .. "…"
+  end
+  return name
+end
+
 local function title_for(slot)
   local busy = slot.status == "busy" or slot.status == "streaming"
   local dot = busy and "●" or "○"
-  if slot.id == primary_id then
-    return string.format(" %s #%d · focus ", dot, slot.id)
+  local name = session_label(slot)
+  local focus = slot.id == primary_id and " · focus" or ""
+  if name then
+    return string.format(" %s #%d · %s%s ", dot, slot.id, name, focus)
   end
-  return string.format(" %s #%d ", dot, slot.id)
+  return string.format(" %s #%d%s ", dot, slot.id, focus)
+end
+
+local function refresh_slot_title(slot)
+  if slot.win and vim.api.nvim_win_is_valid(slot.win) then
+    pcall(vim.api.nvim_win_set_config, slot.win, { title = title_for(slot), title_pos = "center" })
+  end
+end
+
+local function apply_slot_state(slot, data)
+  if type(data) ~= "table" then
+    return
+  end
+  if data.sessionName and data.sessionName ~= "" then
+    slot.session_name = data.sessionName
+  end
+  if data.isStreaming then
+    slot.status = "busy"
+  elseif data.isStreaming == false and not data.isCompacting then
+    slot.status = "idle"
+  end
+  refresh_slot_title(slot)
 end
 
 local function ensure_slot_hl()
@@ -243,13 +283,15 @@ local function satellite_on_event(slot, ev)
     slot.status = "busy"
   elseif ev.type == "agent_end" or ev.type == "agent_settled" then
     slot.status = "idle"
+  elseif ev.type == "response" and ev.success and ev.data then
+    if ev.command == "get_state" or ev.command == "set_session_name" then
+      apply_slot_state(slot, ev.data)
+    end
   end
   pcall(function()
     require("pi.render").on_event(slot.chat_buf, ev)
   end)
-  if slot.win and vim.api.nvim_win_is_valid(slot.win) then
-    pcall(vim.api.nvim_win_set_config, slot.win, { title = title_for(slot), title_pos = "center" })
-  end
+  refresh_slot_title(slot)
   if prev ~= slot.status then
     pcall(function()
       require("pi.statusline").repaint()
@@ -297,24 +339,24 @@ function M.busy_wins()
   return wins
 end
 
---- Keep primary slot.status in sync with singleton session (tools path).
+--- Keep primary slot.status / name in sync with singleton session.
 function M.sync_primary_status()
   local p = M.primary()
   if not p then
     return
   end
   local st = "idle"
+  local name
   pcall(function()
-    st = require("pi.session").get().status
+    local g = require("pi.session").get()
+    st = g.status
+    name = g.session_name
   end)
-  local next_status = (st == "streaming" or st == "compacting") and "busy" or "idle"
-  if p.status == next_status then
-    return
+  if name and name ~= "" then
+    p.session_name = name
   end
-  p.status = next_status
-  if p.win and vim.api.nvim_win_is_valid(p.win) then
-    pcall(vim.api.nvim_win_set_config, p.win, { title = title_for(p), title_pos = "center" })
-  end
+  p.status = (st == "streaming" or st == "compacting") and "busy" or "idle"
+  refresh_slot_title(p)
 end
 
 function M.count()
@@ -355,6 +397,7 @@ function M.ensure_default()
     chat_buf = buf,
     win = nil,
     status = "idle",
+    session_name = nil,
     is_default = true,
   }
   next_id = next_id + 1
@@ -362,6 +405,12 @@ function M.ensure_default()
   primary_id = slot.id
   map_slot_keys(slot)
   ensure_focus_autocmd()
+  pcall(function()
+    local n = require("pi.session").get().session_name
+    if n and n ~= "" then
+      slot.session_name = n
+    end
+  end)
   return slot
 end
 
@@ -381,6 +430,7 @@ function M.create()
     chat_buf = buf,
     win = nil,
     status = "idle",
+    session_name = nil,
     is_default = false,
   }
   slots[#slots + 1] = slot
@@ -399,6 +449,10 @@ function M.create()
     pcall(client.stop)
     return nil, tostring(err)
   end
+  -- Ask RPC for session name / busy flags
+  pcall(function()
+    client.send({ type = "get_state", id = "slot-state-" .. tostring(id) })
+  end)
   if visible then
     M.show()
   end

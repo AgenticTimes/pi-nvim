@@ -59,6 +59,9 @@ function M.apply_state(data)
   end
   if data.sessionName then
     state.session_name = data.sessionName
+    pcall(function()
+      require("pi.slots").sync_primary_status()
+    end)
   end
   if data.sessionFile then
     state.session_file = data.sessionFile
