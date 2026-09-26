@@ -57,10 +57,10 @@ h.assert_truthy(slots.create(), "sat 1")
 h.assert_truthy(slots.create(), "sat 2")
 h.assert_eq(slots.count(), 3, "at max")
 
--- at max: refuse — do NOT evict/close a right-hand satellite
+-- at capacity: refuse — do NOT evict/close a right-hand satellite
 local s, err = slots.create()
-h.assert_false(s, "create at max fails")
-h.assert_truthy(tostring(err):find("max slots", 1, true), "error mentions max: " .. tostring(err))
+h.assert_false(s, "create at capacity fails")
+h.assert_truthy(tostring(err):find("no room", 1, true), "error mentions no room: " .. tostring(err))
 h.assert_eq(slots.count(), 3, "no eviction; count unchanged")
 
 slots._reset_for_test()

@@ -17,9 +17,22 @@ local visible = false
 local function max_slots()
   local n = require("pi.config").opts.max_slots
   if type(n) ~= "number" or n < 1 then
-    return 4
+    return 24
   end
   return math.floor(n)
+end
+
+local function slot_mins()
+  local o = require("pi.config").opts
+  local mw = o.slot_min_width
+  local mh = o.slot_min_height
+  if type(mw) ~= "number" or mw < 8 then
+    mw = 24
+  end
+  if type(mh) ~= "number" or mh < 3 then
+    mh = 6
+  end
+  return math.floor(mw), math.floor(mh)
 end
 
 --- Singleton facade (`require("pi.client")`). Tests stub this table; do not
@@ -35,9 +48,67 @@ local function chrome_rows()
   return cmd + status + spare
 end
 
---- Pure layout math (testable). Focused master left; others stack right.
---- As satellite count grows, master shrinks so the new slot fits.
----@param opts { cols: integer, lines: integer, chrome?: integer, ids: integer[], primary: integer, margin?: integer }
+--- How many min-sized cells fit (vertical first, then horizontal).
+---@param opts { cols: integer, lines: integer, chrome?: integer, margin?: integer, min_w?: integer, min_h?: integer }
+---@return integer
+function M.capacity(opts)
+  local gap = 1
+  local chrome = opts.chrome or 2
+  local margin = opts.margin or 1
+  local min_w = opts.min_w
+  local min_h = opts.min_h
+  if not min_w or not min_h then
+    min_w, min_h = slot_mins()
+  end
+  local usable_h = math.max(min_h, (opts.lines or 40) - chrome - 2 * margin)
+  local usable_w = math.max(min_w, (opts.cols or 80) - 2 * margin)
+  local rows = math.max(1, math.floor((usable_h + gap) / (min_h + gap)))
+  local cols_n = math.max(1, math.floor((usable_w + gap) / (min_w + gap)))
+  return math.min(max_slots(), rows * cols_n)
+end
+
+--- Pack `id_list` into a rectangle as a grid: fill rows (vertical) up to
+--- max_rows at min_h, then add columns (horizontal split).
+local function place_grid(id_list, row0, col0, w, h, gap, min_w, min_h, primary, out)
+  local n = #id_list
+  if n == 0 then
+    return
+  end
+  local max_rows = math.max(1, math.floor((h + gap) / (min_h + gap)))
+  local rows = math.min(n, max_rows)
+  local cols_n = math.ceil(n / rows)
+  local col_w = math.max(1, math.floor((w - (cols_n - 1) * gap) / cols_n))
+  local cell_h = math.max(1, math.floor((h - (rows - 1) * gap) / rows))
+  for i, id in ipairs(id_list) do
+    local col_i = (i - 1) % cols_n
+    local row_i = math.floor((i - 1) / cols_n)
+    local row = row0 + row_i * (cell_h + gap)
+    local col = col0 + col_i * (col_w + gap)
+    local cw = col_w
+    local ch = cell_h
+    if col_i == cols_n - 1 then
+      cw = math.max(1, w - col_i * (col_w + gap))
+    end
+    if row_i == rows - 1 then
+      ch = math.max(1, h - row_i * (cell_h + gap))
+    end
+    local focused = id == primary
+    out[id] = {
+      row = row,
+      col = col,
+      width = cw,
+      height = ch,
+      border = "rounded",
+      zindex = focused and 52 or 48,
+      focused = focused,
+    }
+  end
+end
+
+--- Pure layout math (testable).
+--- Primary (master) stays left while space allows; satellites pack right
+--- with vertical-first then horizontal splits at slot_min_*.
+---@param opts { cols: integer, lines: integer, chrome?: integer, ids: integer[], primary: integer, margin?: integer, min_w?: integer, min_h?: integer }
 ---@return table<integer, { row: integer, col: integer, width: integer, height: integer, border: string, zindex: integer, focused: boolean }>
 function M.compute_layout(opts)
   local cols = opts.cols
@@ -46,15 +117,21 @@ function M.compute_layout(opts)
   local margin = opts.margin or 1
   local ids = opts.ids
   local primary = opts.primary
-  local usable_h = math.max(8, lines - chrome - 2 * margin)
-  local usable_w = math.max(20, cols - 2 * margin)
+  local min_w = opts.min_w
+  local min_h = opts.min_h
+  if not min_w or not min_h then
+    min_w, min_h = slot_mins()
+  end
+  local usable_h = math.max(min_h, lines - chrome - 2 * margin)
+  local usable_w = math.max(min_w, cols - 2 * margin)
+  local gap = 1
+  local out = {}
   local sats = {}
   for _, id in ipairs(ids) do
     if id ~= primary then
       sats[#sats + 1] = id
     end
   end
-  local out = {}
   if #sats == 0 then
     out[primary] = {
       row = margin,
@@ -67,63 +144,35 @@ function M.compute_layout(opts)
     }
     return out
   end
-  local gap = 1
+
   local n = #sats
-  local min_sat_h = 8
-  local min_sat_w = 22
-  local min_master_w = 22
-  -- Prefer keeping each satellite readable: if a single column would crush
-  -- cell height, add stack columns and steal that width from the master
-  -- (largest window) — never from other satellites.
-  local stack_cols = 1
-  local stack_rows = n
-  while stack_cols < 3 do
-    stack_rows = math.ceil(n / stack_cols)
-    local trial_h = math.floor((usable_h - (stack_rows - 1) * gap) / stack_rows)
-    if trial_h >= min_sat_h then
-      break
-    end
-    stack_cols = stack_cols + 1
-    stack_rows = math.ceil(n / stack_cols)
-  end
-  -- Base stack share grows with sat count; multi-col needs more width from master.
-  local stack_frac = math.min(0.62, 0.24 + n * 0.07 + (stack_cols - 1) * 0.12)
-  local stack_w = math.max(min_sat_w * stack_cols + gap * (stack_cols - 1), math.floor(usable_w * stack_frac))
-  local master_w = math.max(min_master_w, usable_w - stack_w - gap)
-  stack_w = usable_w - master_w - gap
-  local col_w = math.max(min_sat_w, math.floor((stack_w - (stack_cols - 1) * gap) / stack_cols))
-  local cell_h = math.max(5, math.floor((usable_h - (stack_rows - 1) * gap) / stack_rows))
-  for i, id in ipairs(sats) do
-    local col_i = (i - 1) % stack_cols
-    local row_i = math.floor((i - 1) / stack_cols)
-    local row = margin + row_i * (cell_h + gap)
-    local h = cell_h
-    if row_i == stack_rows - 1 then
-      h = math.max(5, usable_h - (row - margin))
-    end
-    local w = col_w
-    if col_i == stack_cols - 1 then
-      w = math.max(min_sat_w, stack_w - col_i * (col_w + gap))
-    end
-    out[id] = {
-      row = row,
-      col = margin + master_w + gap + col_i * (col_w + gap),
-      width = w,
-      height = h,
+  local max_rows = math.max(1, math.floor((usable_h + gap) / (min_h + gap)))
+  local stack_rows = math.min(n, max_rows)
+  local stack_cols = math.ceil(n / stack_rows)
+  local need_stack_w = stack_cols * min_w + (stack_cols - 1) * gap
+
+  -- Master + right pack when both sides can keep min width
+  if need_stack_w + gap + min_w <= usable_w then
+    -- Prefer a readable stack when few cols; extra width goes to master.
+    local preferred = math.max(need_stack_w, math.floor(usable_w * math.min(0.48, 0.20 + stack_cols * 0.10)))
+    local stack_w = math.min(preferred, usable_w - min_w - gap)
+    stack_w = math.max(need_stack_w, stack_w)
+    local master_w = usable_w - stack_w - gap
+    out[primary] = {
+      row = margin,
+      col = margin,
+      width = master_w,
+      height = usable_h,
       border = "rounded",
-      zindex = 48,
-      focused = false,
+      zindex = 52,
+      focused = true,
     }
+    place_grid(sats, margin, margin + master_w + gap, stack_w, usable_h, gap, min_w, min_h, primary, out)
+    return out
   end
-  out[primary] = {
-    row = margin,
-    col = margin,
-    width = master_w,
-    height = usable_h,
-    border = "rounded",
-    zindex = 52,
-    focused = true,
-  }
+
+  -- Screen full at min grain: equal grid of every slot (primary is just one cell)
+  place_grid(ids, margin, margin, usable_w, usable_h, gap, min_w, min_h, primary, out)
   return out
 end
 
@@ -577,8 +626,13 @@ end
 --- Create a new satellite slot (new pi job). Returns slot or nil, err.
 function M.create()
   M.ensure_default()
-  if #slots >= max_slots() then
-    return nil, "max slots (" .. tostring(max_slots()) .. "); close one with a_"
+  local cap = M.capacity({
+    cols = vim.o.columns,
+    lines = vim.o.lines,
+    chrome = chrome_rows(),
+  })
+  if #slots >= cap then
+    return nil, string.format("no room (capacity %d at min cell); close one with a_", cap)
   end
   local id = next_id
   next_id = next_id + 1
