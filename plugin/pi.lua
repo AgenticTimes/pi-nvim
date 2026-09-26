@@ -15,6 +15,19 @@ vim.api.nvim_create_user_command("PiInterrupt", function()
   require("pi").interrupt()
 end, { desc = "Interrupt in-flight LLM request" })
 
+vim.api.nvim_create_user_command("PiCompact", function(opts)
+  local instr = opts.args
+  if instr == "" then
+    require("pi").compact()
+  else
+    require("pi").compact({ custom_instructions = instr })
+  end
+end, { nargs = "*", desc = "Compact pi session context" })
+
+vim.api.nvim_create_user_command("PiAutoCompact", function()
+  require("pi").toggle_auto_compaction()
+end, { desc = "Toggle pi auto-compaction" })
+
 vim.api.nvim_create_user_command("PiNewSession", function()
   require("pi.runtime").new_session()
 end, { desc = "Start new pi session" })

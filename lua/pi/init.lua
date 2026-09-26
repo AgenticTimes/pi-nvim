@@ -87,4 +87,16 @@ function M.focus_toggle()
   return require("pi.ui").focus_toggle()
 end
 
+function M.compact(opts)
+  return require("pi.runtime").compact(opts)
+end
+
+function M.set_auto_compaction(enabled)
+  return require("pi.runtime").set_auto_compaction(enabled)
+end
+
+function M.toggle_auto_compaction()
+  return require("pi.runtime").toggle_auto_compaction()
+end
+
 return M

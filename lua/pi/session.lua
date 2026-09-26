@@ -1,7 +1,7 @@
 local M = {}
 
 local state = {
-  status = "idle", -- idle|streaming
+  status = "idle", -- idle|streaming|compacting
   messages = {},
   touched = {}, ---@type table[]
   model = nil,
@@ -9,6 +9,7 @@ local state = {
   mode = "auto",
   session_name = nil,
   session_file = nil,
+  auto_compaction = nil, ---@type boolean|nil
 }
 
 function M.reset()
@@ -19,7 +20,7 @@ function M.reset()
   state.thinking = nil
   state.session_name = nil
   state.session_file = nil
-  -- keep mode
+  -- keep mode + auto_compaction preference
   pcall(function()
     require("pi.statusline").stop()
   end)
@@ -28,7 +29,9 @@ end
 local function sync_busy()
   pcall(function()
     if state.status == "streaming" then
-      require("pi.statusline").start()
+      require("pi.statusline").start("Working")
+    elseif state.status == "compacting" then
+      require("pi.statusline").start("Compacting")
     else
       require("pi.statusline").stop()
     end
@@ -51,10 +54,19 @@ function M.apply_state(data)
   if data.sessionFile then
     state.session_file = data.sessionFile
   end
-  if data.isStreaming then
+  if data.autoCompactionEnabled ~= nil then
+    state.auto_compaction = data.autoCompactionEnabled
+  end
+  if data.isCompacting then
+    state.status = "compacting"
+    sync_busy()
+  elseif data.isStreaming then
     state.status = "streaming"
     sync_busy()
-  elseif data.isStreaming == false then
+  elseif data.isStreaming == false and data.isCompacting == false then
+    state.status = "idle"
+    sync_busy()
+  elseif data.isStreaming == false and data.isCompacting == nil then
     state.status = "idle"
     sync_busy()
   end
@@ -77,6 +89,11 @@ function M.title_bits()
   end
   if state.status == "streaming" then
     table.insert(bits, "…")
+  elseif state.status == "compacting" then
+    table.insert(bits, "compact…")
+  end
+  if state.auto_compaction == false then
+    table.insert(bits, "no-autocompact")
   end
   return table.concat(bits, " · ")
 end
@@ -86,12 +103,16 @@ function M.get()
 end
 
 function M.is_busy()
-  return state.status == "streaming"
+  return state.status == "streaming" or state.status == "compacting"
 end
 
 function M.set_status(s)
   state.status = s
   sync_busy()
+end
+
+function M.set_auto_compaction(enabled)
+  state.auto_compaction = enabled and true or false
 end
 
 function M.touched()
@@ -127,6 +148,17 @@ function M.on_event(ev)
     state.status = "streaming"
     sync_busy()
   elseif ev.type == "agent_end" then
+    if state.status ~= "compacting" then
+      state.status = "idle"
+      sync_busy()
+    end
+    pcall(function()
+      require("pi.statusline").repaint()
+    end)
+  elseif ev.type == "compaction_start" then
+    state.status = "compacting"
+    sync_busy()
+  elseif ev.type == "compaction_end" then
     state.status = "idle"
     sync_busy()
     pcall(function()

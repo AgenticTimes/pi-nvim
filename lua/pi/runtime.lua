@@ -239,6 +239,81 @@ local function on_event(ev)
     local path = ev.data and ev.data.path
     vim.notify("pi: exported HTML" .. (path and (": " .. path) or ""), vim.log.levels.INFO)
   end
+
+  if ev.type == "response" and ev.command == "compact" then
+    vim.schedule(function()
+      if not ev.success then
+        vim.notify("pi: compact failed: " .. tostring(ev.error or "?"), vim.log.levels.ERROR)
+        return
+      end
+      local d = ev.data or {}
+      local before = d.tokensBefore
+      local after = d.estimatedTokensAfter
+      local msg
+      if before and after then
+        msg = string.format("pi: compacted %s → %s tokens", tostring(before), tostring(after))
+      else
+        msg = "pi: compacted"
+      end
+      vim.notify(msg, vim.log.levels.INFO)
+    end)
+  end
+
+  if ev.type == "response" and ev.command == "set_auto_compaction" then
+    vim.schedule(function()
+      if ev.success then
+        vim.notify(
+          "pi: auto-compaction → " .. (require("pi.session").get().auto_compaction and "on" or "off"),
+          vim.log.levels.INFO
+        )
+        pcall(function()
+          require("pi.ui").refresh_title()
+        end)
+      else
+        vim.notify("pi: set_auto_compaction failed: " .. tostring(ev.error or "?"), vim.log.levels.ERROR)
+      end
+    end)
+  end
+
+  if ev.type == "compaction_end" then
+    vim.schedule(function()
+      local chat = require("pi.ui").chat_buf()
+      local render = require("pi.render")
+      if ev.aborted then
+        vim.notify("pi: compaction aborted", vim.log.levels.WARN)
+        render.append(chat, "· compaction aborted")
+        return
+      end
+      if not ev.result then
+        local err = ev.errorMessage or "compaction failed"
+        vim.notify("pi: " .. tostring(err), vim.log.levels.WARN)
+        render.append(chat, "· compaction failed")
+        return
+      end
+      local r = ev.result
+      local before = r.tokensBefore
+      local after = r.estimatedTokensAfter
+      local line
+      if before and after then
+        local function fmt(n)
+          if type(n) ~= "number" then
+            return "?"
+          end
+          if n >= 1000 then
+            return string.format("%.0fk", n / 1000)
+          end
+          return tostring(n)
+        end
+        line = string.format("· compacted %s → %s", fmt(before), fmt(after))
+      else
+        line = "· compacted"
+      end
+      if ev.reason and ev.reason ~= "manual" then
+        line = line .. " (" .. tostring(ev.reason) .. ")"
+      end
+      render.append(chat, line)
+    end)
+  end
 end
 
 local function build_cmd(opts)
@@ -661,6 +736,46 @@ function M.export_html(output_path, opts)
     end
   end
   return path
+end
+
+--- Manually compact conversation context.
+---@param opts { custom_instructions?: string }|string|nil
+function M.compact(opts)
+  if type(opts) == "string" then
+    opts = { custom_instructions = opts }
+  end
+  opts = opts or {}
+  M.ensure_started()
+  local payload = { type = "compact", id = "compact" }
+  local instr = opts.custom_instructions or opts.customInstructions
+  if instr and instr ~= "" then
+    payload.customInstructions = instr
+  end
+  require("pi.client").send(payload)
+  require("pi.session").set_status("compacting")
+end
+
+---@param enabled boolean
+function M.set_auto_compaction(enabled)
+  enabled = not not enabled
+  M.ensure_started()
+  require("pi.session").set_auto_compaction(enabled)
+  require("pi.client").send({
+    type = "set_auto_compaction",
+    enabled = enabled,
+    id = "set-auto-compact",
+  })
+  pcall(function()
+    require("pi.ui").refresh_title()
+  end)
+end
+
+function M.toggle_auto_compaction()
+  local cur = require("pi.session").get().auto_compaction
+  if cur == nil then
+    cur = true
+  end
+  M.set_auto_compaction(not cur)
 end
 
 function M.stop_job()

@@ -4,6 +4,7 @@ local M = {}
 local FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
 local frame = 1
 local started_at ---@type number|nil
+local busy_label = "Working"
 local timer ---@type uv.uv_timer_t|nil
 local overlay_buf ---@type integer|nil
 local overlay_win ---@type integer|nil
@@ -123,7 +124,7 @@ end
 function M.text()
   if started_at then
     local sec = math.max(0, math.floor((vim.uv.hrtime() - started_at) / 1e9))
-    return string.format("%s Working · %ds", FRAMES[frame], sec)
+    return string.format("%s %s · %ds", FRAMES[frame], busy_label, sec)
   end
   local n = 0
   pcall(function()
@@ -143,7 +144,9 @@ function M.repaint()
   refresh()
 end
 
-function M.start()
+---@param label string|nil e.g. "Working" or "Compacting"
+function M.start(label)
+  busy_label = label or "Working"
   if started_at then
     refresh()
     return
@@ -170,6 +173,7 @@ function M.stop()
     return
   end
   started_at = nil
+  busy_label = "Working"
   frame = 1
   close_timer()
   refresh()
