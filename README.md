@@ -36,7 +36,7 @@ Neovim-native frontend for [pi](https://github.com/earendil-works/pi) coding age
 | `:Pi` | Toggle chat UI |
 | `:PiStop` | Abort agent (`require("pi").interrupt()` / `stop()`) |
 | `:PiCompact [instructions]` | Compact session context |
-| `:PiAutoCompact` | Toggle auto-compaction |
+| `:PiAutoCompact` | Toggle auto-compaction (`SPC a U`) |
 | `:PiNewSession` | New session |
 | `:PiDiff` | Open review |
 | `:PiAccept` / `:PiReject` | Accept / reject current pending file |

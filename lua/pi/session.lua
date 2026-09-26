@@ -36,6 +36,12 @@ local function sync_busy()
       require("pi.statusline").stop()
     end
   end)
+  pcall(function()
+    require("pi.compact_indicator").update({
+      compacting = state.status == "compacting",
+      auto = state.auto_compaction,
+    })
+  end)
 end
 
 function M.apply_state(data)
@@ -56,6 +62,12 @@ function M.apply_state(data)
   end
   if data.autoCompactionEnabled ~= nil then
     state.auto_compaction = data.autoCompactionEnabled
+    pcall(function()
+      require("pi.compact_indicator").update({
+        compacting = state.status == "compacting",
+        auto = state.auto_compaction,
+      })
+    end)
   end
   if data.isCompacting then
     state.status = "compacting"
@@ -113,6 +125,12 @@ end
 
 function M.set_auto_compaction(enabled)
   state.auto_compaction = enabled and true or false
+  pcall(function()
+    require("pi.compact_indicator").update({
+      compacting = state.status == "compacting",
+      auto = state.auto_compaction,
+    })
+  end)
 end
 
 function M.touched()
