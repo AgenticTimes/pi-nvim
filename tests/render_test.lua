@@ -7,6 +7,17 @@ local render = require("pi.render")
 local b = vim.api.nvim_create_buf(false, true)
 render.setup(b)
 h.assert_eq(vim.bo[b].filetype, "pi-chat", "chat ft isolates from markdown renderers")
+-- When markdown parser is installed, highlighter must be attached (register alone is not enough).
+do
+  local ok_add = pcall(vim.treesitter.language.add, "markdown")
+  if ok_add then
+    local has = false
+    pcall(function()
+      has = vim.treesitter.highlighter.active[b] ~= nil
+    end)
+    h.assert_truthy(has, "treesitter highlighter active on pi-chat")
+  end
+end
 render.reset(b)
 
 -- 5 identical successful reads → one collapsed line

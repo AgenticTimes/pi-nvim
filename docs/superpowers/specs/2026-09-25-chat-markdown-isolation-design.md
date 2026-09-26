@@ -11,9 +11,10 @@ Keep readable markdown syntax highlighting in chat without third-party markdown 
 ## Approach (chosen)
 
 1. Chat buffer filetype → `pi-chat` (not `markdown`).
-2. Register Treesitter: `vim.treesitter.language.register("markdown", "pi-chat")` so highlights still work when parsers exist.
-3. Best-effort `pcall(require("render-markdown").buf_disable)` after setup (no hard dependency).
-4. Ask input stays `markdown` (short editable draft; less box conflict).
+2. Register Treesitter: `vim.treesitter.language.register("markdown", "pi-chat")`.
+3. **Explicitly** `vim.treesitter.start(buf, "markdown")` — nvim-treesitter only auto-starts on `FileType=markdown`, so register alone leaves chat unhighlighted.
+4. Best-effort `pcall(require("render-markdown").buf_disable)` after setup (no hard dependency).
+5. Ask input stays `markdown` (short editable draft; less box conflict).
 
 ## Out of scope
 
