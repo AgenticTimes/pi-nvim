@@ -46,7 +46,7 @@ h.assert_truthy(lay[1].focused, "primary focused")
 h.assert_false(lay[2].focused, "sat not focused")
 h.assert_truthy(lay[1].width > lay[2].width, "master wider")
 h.assert_truthy(lay[1].height > lay[2].height, "master taller than one sat")
-h.assert_eq(lay[1].height, lay[2].height + 1 + lay[3].height, "stack fills master height (+gap)")
+h.assert_eq(lay[1].height, lay[2].height + 2 + lay[3].height, "stack fills master height (+gap=2)")
 h.assert_truthy(lay[2].col > lay[1].col, "stack to the right of master")
 h.assert_eq(lay[2].col, lay[3].col, "sats same column")
 h.assert_truthy(lay[3].row > lay[2].row, "sats stacked vertically")
@@ -207,14 +207,12 @@ for id = 2, 6 do
 end
 h.assert_truthy(has_ns, "some sats share N/S edge")
 
--- full borders always (omitting a side collapses the outer box and looks misaligned)
+-- independent frames (gap=2): plain corners, no shared-cell tees
 local dummy = { id = 2 }
 local north = slots.border_for(dummy, false, { S = true, W = true })
-h.assert_eq(north[6][1], "─", "north keeps bottom border")
-h.assert_eq(north[5][1], "┤", "north br when S (no E)")
-h.assert_eq(north[7][1], "┴", "north bl tee when W+S")
+h.assert_eq(north[1][1], "┌", "plain TL")
+h.assert_eq(north[5][1], "┘", "plain BR")
 local south = slots.border_for(dummy, false, { N = true, W = true })
-h.assert_eq(south[2][1], "─", "south keeps top for title")
-h.assert_eq(south[1][1], "┼", "south TL junction with N+W")
+h.assert_eq(south[1][1], "┌", "plain TL even with neighbors")
 
 print("OK slots_layout_test")

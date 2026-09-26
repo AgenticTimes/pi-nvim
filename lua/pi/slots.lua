@@ -18,6 +18,10 @@ local primary_id ---@type integer|nil
 local next_id = 1
 local visible = false
 
+--- Gap between float *content* boxes. Must be ≥2 so each pane's border sits on
+--- its own cells (gap=1 shares one row/col → titles wipe neighbors → looks 错位).
+local LAYOUT_GAP = 2
+
 local function max_slots()
   local n = require("pi.config").opts.max_slots
   if type(n) ~= "number" or n < 1 then
@@ -57,7 +61,7 @@ end
 ---@param opts { cols: integer, lines: integer, chrome?: integer, margin?: integer, min_w?: integer, min_h?: integer }
 ---@return integer
 function M.capacity(opts)
-  local gap = 1
+  local gap = LAYOUT_GAP
   local chrome = opts.chrome or 2
   local margin = opts.margin or 1
   local min_w = opts.min_w
@@ -140,9 +144,9 @@ local function cols_overlap(a, b)
   return a.col < b.col + b.width and b.col < a.col + a.width
 end
 
---- Mark nbr.{N,S,E,W} so borders can share an edge without ┐┌ seams.
+--- Mark nbr.{N,S,E,W} for optional styling (borders no longer share cells).
 local function annotate_neighbors(out, gap)
-  gap = gap or 1
+  gap = gap or LAYOUT_GAP
   local list = {}
   for id, g in pairs(out) do
     g.nbr = { N = false, S = false, E = false, W = false }
@@ -188,7 +192,7 @@ function M.compute_layout(opts)
   end
   local usable_h = math.max(min_h, lines - chrome - 2 * margin)
   local usable_w = math.max(min_w, cols - 2 * margin)
-  local gap = 1
+  local gap = LAYOUT_GAP
   local out = {}
   local sats = {}
   for _, id in ipairs(ids) do
@@ -464,64 +468,24 @@ local function ensure_resize_autocmd()
   })
 end
 
---- Float border array. gap=1 means neighbors share one screen row/col; use tee
---- chars on shared edges. Always draw all four sides — omitting a side makes
---- Neovim shrink the outer box and content appears to spill into neighbors.
+--- Independent float frame (gap≥2 so borders never share a cell with neighbors).
 ---@param slot PiSlot
 ---@param focused boolean
 ---@param nbr { N?: boolean, S?: boolean, E?: boolean, W?: boolean }|nil
 ---@return table
 function M.border_for(slot, focused, nbr)
   local hl = border_hl_name(slot.id, focused)
-  nbr = nbr or {}
   local function cell(ch)
     return { ch, hl }
   end
-  local tl, tr, bl, br
-  if nbr.W and nbr.N then
-    tl = "┼"
-  elseif nbr.W then
-    tl = "┬"
-  elseif nbr.N then
-    tl = "├"
-  else
-    tl = "┌"
-  end
-  if nbr.E and nbr.N then
-    tr = "┼"
-  elseif nbr.E then
-    tr = "┬"
-  elseif nbr.N then
-    tr = "┤"
-  else
-    tr = "┐"
-  end
-  if nbr.W and nbr.S then
-    bl = "┼"
-  elseif nbr.W then
-    bl = "┴"
-  elseif nbr.S then
-    bl = "├"
-  else
-    bl = "└"
-  end
-  if nbr.E and nbr.S then
-    br = "┼"
-  elseif nbr.E then
-    br = "┴"
-  elseif nbr.S then
-    br = "┤"
-  else
-    br = "┘"
-  end
   return {
-    cell(tl),
+    cell("┌"),
     cell("─"),
-    cell(tr),
+    cell("┐"),
     cell("│"),
-    cell(br),
+    cell("┘"),
     cell("─"),
-    cell(bl),
+    cell("└"),
     cell("│"),
   }
 end
@@ -684,11 +648,10 @@ end
 
 local function refresh_slot_title(slot)
   if slot.win and vim.api.nvim_win_is_valid(slot.win) then
-    local focused = slot.id == primary_id
+    -- Only title — re-setting border repaints shared gutter neighbors wrongly.
     pcall(vim.api.nvim_win_set_config, slot.win, {
       title = title_for(slot),
       title_pos = "center",
-      border = border_for(slot, focused, slot._nbr),
     })
   end
 end
@@ -1377,57 +1340,42 @@ function M.apply_layout()
     primary = layout_primary,
   })
   local ui = require("pi.ui")
-  -- Apply south→north so shared-edge titles (on the top border) paint over the
-  -- neighbor's bottom line instead of being wiped.
-  local paint = {}
   for _, slot in ipairs(slots) do
     if not slot.parked and layout[slot.id] then
-      paint[#paint + 1] = slot
+      local g = layout[slot.id]
+      local focused = slot.id == primary_id
+      slot._nbr = g.nbr
+      local cfg = {
+        relative = "editor",
+        width = g.width,
+        height = g.height,
+        row = g.row,
+        col = g.col,
+        style = "minimal",
+        border = border_for(slot, focused, g.nbr),
+        title = title_for(slot),
+        title_pos = "center",
+        zindex = g.zindex,
+      }
+      if slot.win and vim.api.nvim_win_is_valid(slot.win) then
+        pcall(vim.api.nvim_win_set_config, slot.win, cfg)
+      else
+        slot.win = vim.api.nvim_open_win(slot.chat_buf, focused, cfg)
+      end
+      configure_win(slot.win, slot, focused)
+      if focused then
+        ui.adopt_chat_win(slot.win, slot.chat_buf)
+        pcall(function()
+          require("pi.render").attach_scroll(slot.win, slot.chat_buf)
+          require("pi.render").follow(slot.chat_buf, true, slot.win)
+        end)
+      end
     end
   end
-  table.sort(paint, function(a, b)
-    local ga, gb = layout[a.id], layout[b.id]
-    if ga.row ~= gb.row then
-      return ga.row > gb.row
-    end
-    return ga.col > gb.col
+  -- AC badge sits on the top border row and cuts titles — hide while tiled.
+  pcall(function()
+    require("pi.compact_indicator").hide()
   end)
-  for _, slot in ipairs(paint) do
-    local g = layout[slot.id]
-    local focused = slot.id == primary_id
-    slot._nbr = g.nbr
-    -- Slight z boost for windows with a northern neighbor so their titled top
-    -- wins the shared gap row against the window above.
-    local z = g.zindex
-    if g.nbr and g.nbr.N then
-      z = z + 1
-    end
-    local cfg = {
-      relative = "editor",
-      width = g.width,
-      height = g.height,
-      row = g.row,
-      col = g.col,
-      style = "minimal",
-      border = border_for(slot, focused, g.nbr),
-      title = title_for(slot),
-      title_pos = "center",
-      zindex = z,
-    }
-    if slot.win and vim.api.nvim_win_is_valid(slot.win) then
-      pcall(vim.api.nvim_win_set_config, slot.win, cfg)
-    else
-      slot.win = vim.api.nvim_open_win(slot.chat_buf, focused, cfg)
-    end
-    configure_win(slot.win, slot, focused)
-    if focused then
-      ui.adopt_chat_win(slot.win, slot.chat_buf)
-      pcall(function()
-        require("pi.render").attach_scroll(slot.win, slot.chat_buf)
-        require("pi.render").follow(slot.chat_buf, true, slot.win)
-      end)
-    end
-  end
   pcall(function()
     require("pi.statusline").repaint()
   end)

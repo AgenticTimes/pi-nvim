@@ -52,6 +52,17 @@ function M.update(opts)
     return
   end
 
+  -- Multi-slot tiles use the top border row for titles; AC would cut into them.
+  local multi = false
+  pcall(function()
+    local slots = require("pi.slots")
+    multi = slots.count() > 1 and slots.is_visible()
+  end)
+  if multi then
+    close()
+    return
+  end
+
   ensure_hl()
   close()
 
