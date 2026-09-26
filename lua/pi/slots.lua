@@ -20,7 +20,7 @@ local visible = false
 local function max_slots()
   local n = require("pi.config").opts.max_slots
   if type(n) ~= "number" or n < 1 then
-    return 24
+    return 64
   end
   return math.floor(n)
 end
@@ -51,7 +51,8 @@ local function chrome_rows()
   return cmd + status + spare
 end
 
---- How many min-sized cells fit (vertical first, then horizontal).
+--- How many slots fit when master shrinks to min_w and the rest is a
+--- vertical-first satellite grid (also consider equal full-screen grid).
 ---@param opts { cols: integer, lines: integer, chrome?: integer, margin?: integer, min_w?: integer, min_h?: integer }
 ---@return integer
 function M.capacity(opts)
@@ -66,8 +67,17 @@ function M.capacity(opts)
   local usable_h = math.max(min_h, (opts.lines or 40) - chrome - 2 * margin)
   local usable_w = math.max(min_w, (opts.cols or 80) - 2 * margin)
   local rows = math.max(1, math.floor((usable_h + gap) / (min_h + gap)))
-  local cols_n = math.max(1, math.floor((usable_w + gap) / (min_w + gap)))
-  return math.min(max_slots(), rows * cols_n)
+  -- Equal grid across the whole editor
+  local full_cols = math.max(1, math.floor((usable_w + gap) / (min_w + gap)))
+  local equal = rows * full_cols
+  -- Master at minimum width; pack satellites in the remaining strip
+  local stacked = 1
+  local stack_w = usable_w - min_w - gap
+  if stack_w >= min_w then
+    local stack_cols = math.max(1, math.floor((stack_w + gap) / (min_w + gap)))
+    stacked = 1 + rows * stack_cols
+  end
+  return math.min(max_slots(), math.max(equal, stacked))
 end
 
 --- Pack `id_list` into a rectangle as a grid: fill rows (vertical) up to
@@ -156,8 +166,10 @@ function M.compute_layout(opts)
 
   -- Master + right pack when both sides can keep min width
   if need_stack_w + gap + min_w <= usable_w then
-    -- Prefer a readable stack when few cols; extra width goes to master.
-    local preferred = math.max(need_stack_w, math.floor(usable_w * math.min(0.48, 0.20 + stack_cols * 0.10)))
+    -- Few sats: keep a modest stack. Many sats / many cols: steal from master
+    -- down to min_w so vertical+horizontal grain is fully used.
+    local steal = math.min(0.78, 0.22 + stack_cols * 0.14 + (n > 4 and (n - 4) * 0.03 or 0))
+    local preferred = math.max(need_stack_w, math.floor(usable_w * steal))
     local stack_w = math.min(preferred, usable_w - min_w - gap)
     stack_w = math.max(need_stack_w, stack_w)
     local master_w = usable_w - stack_w - gap

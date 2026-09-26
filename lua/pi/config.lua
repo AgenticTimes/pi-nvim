@@ -39,9 +39,9 @@ M.opts = {
   summon_key = "<C-Space>",
   --- On VimEnter: start RPC in background (no UI); notify when ready.
   bootstrap = true,
-  --- Hard ceiling on concurrent slots (1 primary + satellites).
-  --- Soft limit is geometry: floor(W/min_w) * floor(H/min_h).
-  max_slots = 24,
+  --- Safety ceiling only; real limit is geometry with master shrunk to
+  --- slot_min_width and satellites packed in the rest (see slots.capacity).
+  max_slots = 64,
   --- Minimum float cell size; vertical fill first, then horizontal splits.
   slot_min_width = 24,
   slot_min_height = 6,

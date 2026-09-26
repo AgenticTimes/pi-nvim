@@ -7,7 +7,7 @@ package.loaded["pi.config"] = nil
 require("pi.config").setup({
   slot_min_width = 24,
   slot_min_height = 6,
-  max_slots = 24,
+  max_slots = 64,
   bootstrap = false,
 })
 local slots = require("pi.slots")
@@ -117,7 +117,7 @@ for _ in pairs(cols_seen) do
 end
 h.assert_truthy(ncol >= 2, "vertical min reached → horizontal split")
 
--- capacity = rows * cols at min grain
+-- capacity: master shrinks to min_w; sats pack the rest (not stuck at 24)
 local cap = slots.capacity({
   cols = 120,
   lines = 40,
@@ -126,9 +126,18 @@ local cap = slots.capacity({
   min_w = 24,
   min_h = 6,
 })
--- usable ~118x36 → cols=floor(119/25)=4, rows=floor(37/7)=5 → 20
-h.assert_truthy(cap >= 12, "capacity much larger than old max_slots=6: " .. tostring(cap))
-h.assert_truthy(cap <= 24, "capped by max_slots")
+h.assert_truthy(cap >= 12, "capacity at least a dozen: " .. tostring(cap))
+h.assert_truthy(cap <= 64, "capped by max_slots")
+
+local wide = slots.capacity({
+  cols = 240,
+  lines = 60,
+  chrome = 2,
+  margin = 1,
+  min_w = 24,
+  min_h = 6,
+})
+h.assert_truthy(wide > 24, "wide screen: capacity > old hard 24: " .. tostring(wide))
 
 -- every cell respects min grain (master+stack path)
 for id = 1, 8 do
