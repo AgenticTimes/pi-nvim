@@ -82,4 +82,10 @@ end
 h.assert_truthy(has_c, "newest slot kept")
 
 slots._reset_for_test()
+package.loaded["pi.slots"] = nil
+package.loaded["pi.render"] = nil
+package.loaded["pi.ui"] = nil
+package.loaded["pi.runtime"] = nil
+package.loaded["pi.client"] = nil
+package.loaded["pi.config"] = nil
 print("OK slots_evict_test")

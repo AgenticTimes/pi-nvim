@@ -1781,7 +1781,7 @@ local function paint_messages(buf, messages)
             local full = tool_block(buf, call.name, call.args, nil, 1)
             local display = collapse_tool_lines(full, true, false)
             append_tool_lines(buf, display)
-            attach_tool_payload(buf, full, false, false)
+            attach_tool_payload(buf, full, true, false)
           end
         elseif parts.tools and parts.tools > 0 then
           append_tool_lines(buf, { string.format("⚙ %d tool call(s)", parts.tools) })

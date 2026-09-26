@@ -728,7 +728,7 @@ function M.apply_layout()
         row = g.row,
         col = g.col,
         style = "minimal",
-        border = border_for(focused),
+        border = border_for(slot, focused),
         title = title_for(slot),
         title_pos = "center",
         zindex = g.zindex,
@@ -738,7 +738,7 @@ function M.apply_layout()
       else
         slot.win = vim.api.nvim_open_win(slot.chat_buf, focused, cfg)
       end
-      configure_win(slot.win, focused)
+      configure_win(slot.win, slot, focused)
       if focused then
         ui.adopt_chat_win(slot.win, slot.chat_buf)
         pcall(function()

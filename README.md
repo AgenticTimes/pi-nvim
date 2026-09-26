@@ -54,7 +54,9 @@ On first open, if `resume_last = true` (default), switches to the newest session
 
 In review buffers: `a`/`r` accept/reject file · `A`/`R` accept/reject all · `ah`/`rh` hunk · `]f`/`[f` next/prev file · `q` close (returns to chat when queue empties).
 
-In chat: `<CR>` open ask popup (or expand/collapse tool under cursor) · `za` toggle tool expand · `]]`/`[[` next/prev message · `q` close · `<Tab>` toggle ask.
+In chat: `<CR>` open ask popup (or expand/collapse tool under cursor) · `za` toggle one tool · `ftc` fold/unfold all toolcalls · `ftk` fold/unfold all thinking · `]]`/`[[` next/prev message · `q` close · `<Tab>` toggle ask.
+
+Toolcall / thinking boxes show `ftc` / `ftk` on the top border; content starts expanded.
 
 In ask popup: `<CR>` submit · `<C-j>` newline · `<Esc>` close popup · `<C-c>` abort · `<Up>`/`<Down>` history · empty `/` slash · `@` mention · empty `#` skills.
 
