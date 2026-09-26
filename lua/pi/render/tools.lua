@@ -8,6 +8,7 @@ M.COLLAPSE_BODY = 3
 M.COLLAPSE_ERR_BODY = 6
 
 local MAX_ARG_CHARS = 2000
+local COLLAPSE_COL = 56
 
 function M.short_name(name)
   name = tostring(name or "?")
@@ -23,37 +24,60 @@ local function clip(s)
   return vim.fn.strcharpart(s, 0, MAX_ARG_CHARS) .. " …"
 end
 
---- Collapsed tool box: header + a few body lines; expand via ftc / za / <CR>.
+local function trunc_disp(s, cols)
+  cols = cols or COLLAPSE_COL
+  s = tostring(s or "")
+  if vim.fn.strdisplaywidth(s) <= cols then
+    return s
+  end
+  return vim.fn.strcharpart(s, 0, math.max(1, cols - 1)) .. "…"
+end
+
+--- Collapsed tool box: header + at most one truncated body line + marker.
+--- Soft-wrapped long commands are often only 2–4 buffer lines, so the old
+--- "keep 1+3 lines" rule left them unchanged and ftt reported "too short".
 function M.collapse_tool_lines(full, expanded, has_err)
   full = full or {}
-  if expanded or #full <= 1 then
+  if expanded or #full == 0 then
     return full
   end
-  local body_keep = has_err and M.COLLAPSE_ERR_BODY or M.COLLAPSE_BODY
-  local keep = math.min(1 + body_keep, #full)
-  if keep >= #full then
-    return full
+  if #full == 1 then
+    local t = trunc_disp(full[1])
+    if t == full[1] then
+      return full
+    end
+    return { t, "  … ftt" }
   end
-  local out = {}
-  for i = 1, keep do
-    out[i] = full[i]
+  local out = { full[1], trunc_disp(full[2]) }
+  local hidden = #full - 2
+  if hidden > 0 then
+    out[3] = string.format("  … +%d lines  ftt", hidden)
+  else
+    -- Hide the (possibly soft-wrapped) body line entirely when only 2 rows
+    out = { full[1], "  … ftt" }
   end
-  out[#out + 1] = string.format("  … +%d lines  ftt", #full - keep)
   return out
 end
 
 --- Collapsed thinking box (default expanded; ftk toggles).
 function M.collapse_thinking_lines(full, expanded)
   full = full or {}
-  if expanded or #full <= 2 then
+  if expanded or #full == 0 then
     return full
   end
-  local keep = 2
-  local out = {}
-  for i = 1, keep do
-    out[i] = full[i]
+  if #full <= 2 then
+    if #full == 1 then
+      local t = trunc_disp(full[1])
+      if t == full[1] then
+        return full
+      end
+      return { t, "  … ftk" }
+    end
+    -- 2 lines: keep first, fold the rest
+    return { trunc_disp(full[1]), "  … ftk" }
   end
-  out[#out + 1] = string.format("  … +%d lines  ftk", #full - keep)
+  local out = { trunc_disp(full[1]), trunc_disp(full[2]) }
+  out[3] = string.format("  … +%d lines  ftk", #full - 2)
   return out
 end
 

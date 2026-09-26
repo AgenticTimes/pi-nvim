@@ -1176,18 +1176,30 @@ function M.jump_message(buf, win, dir)
 end
 
 --- Apply expand/collapse to one foldable box; shifts later boxes by delta.
+local function lines_differ(a, b)
+  if #a ~= #b then
+    return true
+  end
+  for i = 1, #a do
+    if a[i] ~= b[i] then
+      return true
+    end
+  end
+  return false
+end
+
 local function apply_box_expand(buf, target, expanded)
   local full, display
   if target.tool_full then
     full = target.tool_full
     display = collapse_tool_lines(full, expanded, target.tool_has_err)
-    if #collapse_tool_lines(full, false, target.tool_has_err) >= #full and not expanded then
+    if not expanded and not lines_differ(full, display) then
       return false
     end
   elseif target.fold_full and target.fold_kind == "thinking" then
     full = target.fold_full
     display = collapse_thinking_lines(full, expanded)
-    if #collapse_thinking_lines(full, false) >= #full and not expanded then
+    if not expanded and not lines_differ(full, display) then
       return false
     end
   else
@@ -1269,7 +1281,7 @@ function M.toggle_tool_at_cursor(buf, win)
     return false
   end
   local preview = collapse_tool_lines(target.tool_full, false, target.tool_has_err)
-  if #preview >= #target.tool_full then
+  if not lines_differ(target.tool_full, preview) then
     return false
   end
   return apply_box_expand(buf, target, not target.tool_expanded)
