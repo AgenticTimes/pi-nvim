@@ -147,6 +147,52 @@ local function session_label(slot)
   return name
 end
 
+-- Distinct border colors per slot id (cycle). Focus = brighter + bold.
+local SLOT_COLORS = {
+  { idle = 0x7aa2f7, focus = 0x89b4fa }, -- blue
+  { idle = 0x9ece6a, focus = 0xb9f27c }, -- green
+  { idle = 0xe0af68, focus = 0xffc777 }, -- amber
+  { idle = 0xbb9af7, focus = 0xd4bfff }, -- purple
+  { idle = 0x7dcfff, focus = 0xa6eaff }, -- cyan
+  { idle = 0xf7768e, focus = 0xff9db0 }, -- rose
+}
+
+local function color_index(slot_id)
+  local n = #SLOT_COLORS
+  return ((math.max(1, slot_id or 1) - 1) % n) + 1
+end
+
+local function border_hl_name(slot_id, focused)
+  local i = color_index(slot_id)
+  if focused then
+    return "PiSlotBorder" .. i .. "Focus"
+  end
+  return "PiSlotBorder" .. i
+end
+
+local function ensure_slot_hl()
+  for i, c in ipairs(SLOT_COLORS) do
+    vim.api.nvim_set_hl(0, "PiSlotBorder" .. i, { fg = c.idle })
+    vim.api.nvim_set_hl(0, "PiSlotBorder" .. i .. "Focus", { fg = c.focus, bold = true })
+  end
+end
+
+---@param slot PiSlot
+---@param focused boolean
+local function border_for(slot, focused)
+  local hl = border_hl_name(slot.id, focused)
+  return {
+    { "╭", hl },
+    { "─", hl },
+    { "╮", hl },
+    { "│", hl },
+    { "╯", hl },
+    { "─", hl },
+    { "╰", hl },
+    { "│", hl },
+  }
+end
+
 local function title_for(slot)
   local busy = slot.status == "busy" or slot.status == "streaming"
   local dot = busy and "●" or "○"
@@ -160,7 +206,12 @@ end
 
 local function refresh_slot_title(slot)
   if slot.win and vim.api.nvim_win_is_valid(slot.win) then
-    pcall(vim.api.nvim_win_set_config, slot.win, { title = title_for(slot), title_pos = "center" })
+    local focused = slot.id == primary_id
+    pcall(vim.api.nvim_win_set_config, slot.win, {
+      title = title_for(slot),
+      title_pos = "center",
+      border = border_for(slot, focused),
+    })
   end
 end
 
@@ -177,29 +228,6 @@ local function apply_slot_state(slot, data)
     slot.status = "idle"
   end
   refresh_slot_title(slot)
-end
-
-local function ensure_slot_hl()
-  -- Focus: bright blue border; idle: muted gray
-  vim.api.nvim_set_hl(0, "PiSlotFocusBorder", { fg = 0x7aa2f7, bold = true })
-  vim.api.nvim_set_hl(0, "PiSlotIdleBorder", { fg = 0x565f89 })
-  vim.api.nvim_set_hl(0, "PiSlotFocusTitle", { fg = 0x7aa2f7, bold = true })
-  vim.api.nvim_set_hl(0, "PiSlotIdleTitle", { fg = 0x565f89 })
-end
-
----@param focused boolean
-local function border_for(focused)
-  local hl = focused and "PiSlotFocusBorder" or "PiSlotIdleBorder"
-  return {
-    { "╭", hl },
-    { "─", hl },
-    { "╮", hl },
-    { "│", hl },
-    { "╯", hl },
-    { "─", hl },
-    { "╰", hl },
-    { "│", hl },
-  }
 end
 
 --- Any slot window can interact: focus → primary, Enter → ask that agent.
@@ -269,7 +297,7 @@ local function ensure_focus_autocmd()
   })
 end
 
-local function configure_win(win, focused)
+local function configure_win(win, slot, focused)
   if not win or not vim.api.nvim_win_is_valid(win) then
     return
   end
@@ -281,7 +309,7 @@ local function configure_win(win, focused)
   pcall(function()
     vim.wo[win].winblend = blend
   end)
-  local border_hl = focused and "PiSlotFocusBorder" or "PiSlotIdleBorder"
+  local border_hl = border_hl_name(slot.id, focused)
   pcall(function()
     vim.wo[win].winhl = "Normal:PiChatNormal,NormalFloat:PiChatNormal,FloatBorder:" .. border_hl
   end)
