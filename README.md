@@ -34,7 +34,7 @@ Neovim-native frontend for [pi](https://github.com/earendil-works/pi) coding age
 | Command | Action |
 |---------|--------|
 | `:Pi` | Toggle chat UI |
-| `:PiStop` | Abort agent |
+| `:PiStop` | Abort agent (`require("pi").interrupt()` / `stop()`) |
 | `:PiNewSession` | New session |
 | `:PiDiff` | Open review |
 | `:PiAccept` / `:PiReject` | Accept / reject current pending file |

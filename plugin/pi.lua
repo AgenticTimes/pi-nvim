@@ -11,6 +11,10 @@ vim.api.nvim_create_user_command("PiStop", function()
   require("pi").stop()
 end, { desc = "Abort pi agent" })
 
+vim.api.nvim_create_user_command("PiInterrupt", function()
+  require("pi").interrupt()
+end, { desc = "Interrupt in-flight LLM request" })
+
 vim.api.nvim_create_user_command("PiNewSession", function()
   require("pi.runtime").new_session()
 end, { desc = "Start new pi session" })

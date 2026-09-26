@@ -22,6 +22,11 @@ function M.stop()
   return require("pi.runtime").abort()
 end
 
+--- Abort the in-flight LLM turn (RPC `abort`). Alias of `stop`.
+function M.interrupt()
+  return require("pi.runtime").abort()
+end
+
 function M.accept()
   return require("pi.review").accept()
 end

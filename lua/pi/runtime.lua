@@ -332,16 +332,33 @@ function M.follow_up(message)
   require("pi.client").send({ type = "follow_up", message = message })
 end
 
+--- Abort in-flight LLM turn (+ bash tools). Does not kill the RPC job.
+---@return boolean sent true if abort RPC was delivered
 function M.abort()
   local client = require("pi.client")
+  local sent = false
   if client.is_running() then
+    -- abort: cancel LLM stream; abort_bash: kill in-flight shell tools
     client.send({ type = "abort" })
+    pcall(function()
+      client.send({ type = "abort_bash" })
+    end)
+    sent = true
   end
   require("pi.session").set_status("idle")
   pcall(function()
     require("pi.statusline").stop()
   end)
+  if sent then
+    vim.notify("pi: interrupted", vim.log.levels.INFO)
+  else
+    vim.notify("pi: interrupt ignored (RPC not running)", vim.log.levels.WARN)
+  end
+  return sent
 end
+
+--- Public alias of `abort`.
+M.interrupt = M.abort
 
 function M.new_session()
   M.ensure_started({ no_resume = true })
