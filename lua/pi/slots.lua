@@ -1348,8 +1348,12 @@ function M.show()
     require("pi.ui").adopt_chat_buf(p.chat_buf)
   end
   local ui = require("pi.ui")
-  ui.conceal_explorer()
-  ui.ensure_backdrop()
+  pcall(function()
+    ui.conceal_explorer()
+  end)
+  pcall(function()
+    ui.ensure_backdrop()
+  end)
   -- ui.open paints primary buf; apply_layout applies per-slot colored borders
   ui.open()
   if p then
