@@ -154,3 +154,12 @@ end, {
 vim.api.nvim_create_user_command("PiToggleIdle", function()
   require("pi.slots").toggle_idle()
 end, { desc = "Hide or show all idle (not working) slot windows" })
+
+vim.api.nvim_create_user_command("PiSlot", function(opts)
+  local n = tonumber(opts.args)
+  if not n then
+    vim.notify("pi: usage :PiSlot {id}", vim.log.levels.WARN)
+    return
+  end
+  require("pi.slots").focus_by_id(n)
+end, { nargs = 1, desc = "Promote slot #id to master window" })

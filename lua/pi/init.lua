@@ -43,6 +43,17 @@ function M.setup(opts)
       require("pi.slots").toggle_idle()
     end, { desc = "pi: hide/show idle slots" })
   end
+  if keys.slot_focus and keys.slot_focus ~= "" then
+    local prefix = keys.slot_focus
+    for i = 1, 9 do
+      vim.keymap.set("n", prefix .. tostring(i), function()
+        require("pi.slots").focus_by_id(i)
+      end, { desc = string.format("pi: focus slot #%d as master", i) })
+    end
+    vim.keymap.set("n", prefix .. "0", function()
+      require("pi.slots").focus_by_id(10)
+    end, { desc = "pi: focus slot #10 as master" })
+  end
   if cfg.bootstrap then
     vim.api.nvim_create_autocmd("VimEnter", {
       once = true,
@@ -140,6 +151,10 @@ end
 
 function M.toggle_auto_compaction()
   return require("pi.runtime").toggle_auto_compaction()
+end
+
+function M.focus_slot(n)
+  return require("pi.slots").focus_by_id(n)
 end
 
 function M.toggle_idle()

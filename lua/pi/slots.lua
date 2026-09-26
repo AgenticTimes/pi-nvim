@@ -229,7 +229,7 @@ function M.compute_layout(opts)
       width = master_w,
       height = usable_h,
       border = "single",
-      zindex = 52,
+      zindex = 49,
       focused = true,
     }
     place_grid(sats, margin, margin + master_w + gap, stack_w, usable_h, gap, min_w, min_h, primary, out)
@@ -1067,6 +1067,28 @@ function M.cycle_primary(dir)
   end
   local next_idx = ((idx - 1 + dir) % #slots) + 1
   return M.set_primary(slots[next_idx].id)
+end
+
+--- Promote slot `#n` (title id) to master. Unparks if hidden.
+---@param n integer
+---@return boolean
+function M.focus_by_id(n)
+  n = tonumber(n)
+  if not n or n < 1 then
+    return false
+  end
+  local slot = find(n)
+  if not slot then
+    vim.notify(string.format("pi: no slot #%d", n), vim.log.levels.WARN)
+    return false
+  end
+  if slot.parked then
+    slot.parked = false
+  end
+  if not visible then
+    M.show()
+  end
+  return M.set_primary(n)
 end
 
 function M.apply_layout()
