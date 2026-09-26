@@ -279,15 +279,86 @@ local function configure_win(win, focused)
   end)
 end
 
+local function sole_busy_slot()
+  local busy ---@type PiSlot|nil
+  for _, s in ipairs(slots) do
+    if s.status == "busy" or s.status == "streaming" then
+      if busy then
+        return nil
+      end
+      busy = s
+    end
+  end
+  return busy
+end
+
+local function any_busy_aside(except_id)
+  for _, s in ipairs(slots) do
+    if s.id ~= except_id and (s.status == "busy" or s.status == "streaming") then
+      return s
+    end
+  end
+  return nil
+end
+
+--- If master is idle, give the large pane to a responding slot.
+local function maybe_auto_promote(from_slot)
+  if #slots < 2 or not visible then
+    return
+  end
+  local primary = M.primary()
+  if not primary then
+    return
+  end
+  local primary_busy = primary.status == "busy" or primary.status == "streaming"
+  -- Master still working → keep it large
+  if primary_busy then
+    return
+  end
+  -- Master idle → enlarge the responding slot (prefer the one that just fired)
+  local target = from_slot
+  if not target or (target.status ~= "busy" and target.status ~= "streaming") then
+    target = sole_busy_slot() or any_busy_aside(primary.id)
+  end
+  if not target or target.id == primary.id then
+    return
+  end
+  if target.status ~= "busy" and target.status ~= "streaming" then
+    return
+  end
+  vim.schedule(function()
+    if not visible then
+      return
+    end
+    local p = M.primary()
+    if p and (p.status == "busy" or p.status == "streaming") then
+      return
+    end
+    if target.status == "busy" or target.status == "streaming" then
+      M.set_primary(target.id)
+    end
+  end)
+end
+
 local function satellite_on_event(slot, ev)
   local prev = slot.status
+  local activity = false
   if ev.type == "agent_start" or ev.type == "turn_start" then
     slot.status = "busy"
+    activity = true
+  elseif ev.type == "message_update" or ev.type == "tool_execution_start" then
+    -- Receiving a response: treat as working even if agent_start was missed
+    if slot.status ~= "busy" then
+      slot.status = "busy"
+    end
+    activity = true
   elseif ev.type == "agent_end" or ev.type == "agent_settled" then
     slot.status = "idle"
+    activity = true
   elseif ev.type == "response" and ev.success and ev.data then
     if ev.command == "get_state" or ev.command == "set_session_name" then
       apply_slot_state(slot, ev.data)
+      activity = true
     end
   end
   pcall(function()
@@ -298,6 +369,9 @@ local function satellite_on_event(slot, ev)
     pcall(function()
       require("pi.statusline").repaint()
     end)
+  end
+  if activity then
+    maybe_auto_promote(slot)
   end
 end
 
@@ -357,8 +431,16 @@ function M.sync_primary_status()
   if name and name ~= "" then
     p.session_name = name
   end
+  local prev = p.status
   p.status = (st == "streaming" or st == "compacting") and "busy" or "idle"
   refresh_slot_title(p)
+  if prev ~= p.status then
+    pcall(function()
+      require("pi.statusline").repaint()
+    end)
+    -- Master went idle while a satellite still responds → enlarge that one
+    maybe_auto_promote(p)
+  end
 end
 
 function M.count()
@@ -416,10 +498,41 @@ function M.ensure_default()
   return slot
 end
 
+--- Free a slot when at capacity: oldest idle satellite first, else oldest non-primary.
+local function make_room()
+  if #slots < max_slots() then
+    return true
+  end
+  local function evict(want_idle_only)
+    for _, s in ipairs(slots) do
+      if not s.is_default and s.id ~= primary_id then
+        local idle = s.status == "idle" or s.status == nil
+        if not want_idle_only or idle then
+          local eid = s.id
+          M.close(eid)
+          vim.notify(
+            string.format("pi: closed #%d to make room (max %d)", eid, max_slots()),
+            vim.log.levels.INFO
+          )
+          return true
+        end
+      end
+    end
+    return false
+  end
+  if evict(true) then
+    return #slots < max_slots()
+  end
+  if evict(false) then
+    return #slots < max_slots()
+  end
+  return #slots < max_slots()
+end
+
 --- Create a new satellite slot (new pi job). Returns slot or nil, err.
 function M.create()
   M.ensure_default()
-  if #slots >= max_slots() then
+  if #slots >= max_slots() and not make_room() then
     return nil, "max slots (" .. tostring(max_slots()) .. ")"
   end
   local id = next_id
