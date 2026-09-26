@@ -177,6 +177,21 @@ local function ensure_slot_hl()
   end
 end
 
+local slot_hl_autocmd ---@type integer|nil
+local function ensure_slot_hl_autocmd()
+  if slot_hl_autocmd then
+    return
+  end
+  slot_hl_autocmd = vim.api.nvim_create_autocmd("ColorScheme", {
+    callback = function()
+      ensure_slot_hl()
+      if visible then
+        M.apply_layout()
+      end
+    end,
+  })
+end
+
 ---@param slot PiSlot
 ---@param focused boolean
 local function border_for(slot, focused)
