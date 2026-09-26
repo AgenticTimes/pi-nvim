@@ -146,4 +146,53 @@ for id = 1, 8 do
   h.assert_truthy(g.height >= 5, "id " .. id .. " height")
 end
 
+-- flush: last incomplete row stretches to full stack width (no hole)
+local five = slots.compute_layout({
+  cols = 160,
+  lines = 28,
+  chrome = 2,
+  ids = { 1, 2, 3, 4, 5, 6 },
+  primary = 1,
+  margin = 1,
+  min_w = 24,
+  min_h = 6,
+})
+h.assert_eq(five[1].row, five[2].row, "master and first sat share top")
+h.assert_eq(five[2].col, five[1].col + five[1].width + 1, "sat abuts master (gap=1 for shared border)")
+local max_row = 0
+for id = 2, 6 do
+  if five[id].row > max_row then
+    max_row = five[id].row
+  end
+end
+local last_left, last_right = nil, nil
+for id = 2, 6 do
+  if five[id].row == max_row then
+    local L = five[id].col
+    local R = five[id].col + five[id].width
+    if not last_left or L < last_left then
+      last_left = L
+    end
+    if not last_right or R > last_right then
+      last_right = R
+    end
+  end
+end
+local first_row = five[2].row
+local fr_left, fr_right = nil, nil
+for id = 2, 6 do
+  if five[id].row == first_row then
+    local L = five[id].col
+    local R = five[id].col + five[id].width
+    if not fr_left or L < fr_left then
+      fr_left = L
+    end
+    if not fr_right or R > fr_right then
+      fr_right = R
+    end
+  end
+end
+h.assert_eq(last_left, fr_left, "last row starts at stack left")
+h.assert_eq(last_right, fr_right, "last row fills same width as first row (no hole)")
+
 print("OK slots_layout_test")

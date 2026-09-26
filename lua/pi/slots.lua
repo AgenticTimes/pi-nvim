@@ -81,41 +81,53 @@ function M.capacity(opts)
   return math.min(max_slots(), math.max(equal, stacked))
 end
 
---- Pack `id_list` into a rectangle as a grid: fill rows (vertical) up to
---- max_rows at min_h, then add columns (horizontal split).
+--- Split `total` into `n` sizes with `gap` between them (exact fill).
+local function split_sizes(total, n, gap)
+  n = math.max(1, n)
+  local inner = math.max(n, total - (n - 1) * gap)
+  local base = math.floor(inner / n)
+  local rem = inner - base * n
+  local sizes = {}
+  for i = 1, n do
+    sizes[i] = base + (i <= rem and 1 or 0)
+  end
+  return sizes
+end
+
+--- Pack `id_list` into a rectangle. Each row shares full width (last row
+--- stretches) so the grid has no empty holes.
 local function place_grid(id_list, row0, col0, w, h, gap, min_w, min_h, primary, out)
   local n = #id_list
   if n == 0 then
     return
   end
-  local max_rows = math.max(1, math.floor((h + gap) / (min_h + gap)))
+  local max_rows = math.max(1, math.floor((h + gap) / (math.max(1, min_h) + gap)))
   local rows = math.min(n, max_rows)
   local cols_n = math.ceil(n / rows)
-  local col_w = math.max(1, math.floor((w - (cols_n - 1) * gap) / cols_n))
-  local cell_h = math.max(1, math.floor((h - (rows - 1) * gap) / rows))
-  for i, id in ipairs(id_list) do
-    local col_i = (i - 1) % cols_n
-    local row_i = math.floor((i - 1) / cols_n)
-    local row = row0 + row_i * (cell_h + gap)
-    local col = col0 + col_i * (col_w + gap)
-    local cw = col_w
-    local ch = cell_h
-    if col_i == cols_n - 1 then
-      cw = math.max(1, w - col_i * (col_w + gap))
+  local row_heights = split_sizes(h, rows, gap)
+  local idx = 1
+  local y = row0
+  for r = 1, rows do
+    local row_count = math.min(cols_n, n - idx + 1)
+    local col_widths = split_sizes(w, row_count, gap)
+    local x = col0
+    local ch = row_heights[r]
+    for c = 1, row_count do
+      local id = id_list[idx]
+      local focused = id == primary
+      out[id] = {
+        row = y,
+        col = x,
+        width = col_widths[c],
+        height = ch,
+        border = "single",
+        zindex = focused and 52 or 48,
+        focused = focused,
+      }
+      x = x + col_widths[c] + gap
+      idx = idx + 1
     end
-    if row_i == rows - 1 then
-      ch = math.max(1, h - row_i * (cell_h + gap))
-    end
-    local focused = id == primary
-    out[id] = {
-      row = row,
-      col = col,
-      width = cw,
-      height = ch,
-      border = "rounded",
-      zindex = focused and 52 or 48,
-      focused = focused,
-    }
+    y = y + ch + gap
   end
 end
 
@@ -179,7 +191,7 @@ function M.compute_layout(opts)
       col = margin,
       width = master_w,
       height = usable_h,
-      border = "rounded",
+      border = "single",
       zindex = 52,
       focused = true,
     }
@@ -301,14 +313,15 @@ end
 ---@param focused boolean
 local function border_for(slot, focused)
   local hl = border_hl_name(slot.id, focused)
+  -- Single-line box so adjacent floats share an edge cleanly (gap=1 overlap).
   return {
-    { "╭", hl },
+    { "┌", hl },
     { "─", hl },
-    { "╮", hl },
+    { "┐", hl },
     { "│", hl },
-    { "╯", hl },
+    { "┘", hl },
     { "─", hl },
-    { "╰", hl },
+    { "└", hl },
     { "│", hl },
   }
 end
