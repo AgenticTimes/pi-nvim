@@ -1242,18 +1242,15 @@ function M.show()
 end
 
 function M.hide()
+  -- Close every slot float, including the default slot (it may be a satellite
+  -- after <leader>w{n} promoted another slot to master).
   for _, slot in ipairs(slots) do
-    if not slot.is_default and slot.win and vim.api.nvim_win_is_valid(slot.win) then
+    if slot.win and vim.api.nvim_win_is_valid(slot.win) then
       pcall(vim.api.nvim_win_close, slot.win, true)
     end
-    if not slot.is_default then
-      slot.win = nil
-    end
-  end
-  require("pi.ui").close()
-  for _, slot in ipairs(slots) do
     slot.win = nil
   end
+  require("pi.ui").close()
   visible = false
 end
 
