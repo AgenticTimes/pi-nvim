@@ -7,6 +7,87 @@ local TODO_W = 32
 local todos_open = false
 local fullscreen = true -- default: edge-to-edge chat
 local editor_win ---@type integer|nil
+local backdrop = { buf = nil, win = nil }
+local tree_was_open = false
+
+--- Opaque full-editor underlay so NvimTree/Oil cannot peek through float margins.
+function M.ensure_backdrop()
+  local cmd = math.max(0, vim.o.cmdheight or 0)
+  local status = (vim.o.laststatus == 0) and 0 or 1
+  local spare = (cmd == 0 and status > 0) and 1 or 0
+  local chrome = cmd + status + spare
+  local h = math.max(1, vim.o.lines - chrome)
+  local w = math.max(1, vim.o.columns)
+  if backdrop.win and vim.api.nvim_win_is_valid(backdrop.win) then
+    pcall(vim.api.nvim_win_set_config, backdrop.win, {
+      relative = "editor",
+      row = 0,
+      col = 0,
+      width = w,
+      height = h,
+      zindex = 40,
+    })
+    return
+  end
+  if not backdrop.buf or not vim.api.nvim_buf_is_valid(backdrop.buf) then
+    backdrop.buf = vim.api.nvim_create_buf(false, true)
+    pcall(vim.api.nvim_buf_set_name, backdrop.buf, "pi://backdrop")
+    vim.bo[backdrop.buf].bufhidden = "wipe"
+    vim.bo[backdrop.buf].modifiable = false
+  end
+  backdrop.win = vim.api.nvim_open_win(backdrop.buf, false, {
+    relative = "editor",
+    row = 0,
+    col = 0,
+    width = w,
+    height = h,
+    style = "minimal",
+    border = "none",
+    focusable = false,
+    zindex = 40,
+  })
+  pcall(function()
+    vim.wo[backdrop.win].winblend = 0
+    vim.wo[backdrop.win].winhl = "Normal:PiChatNormal,NormalFloat:PiChatNormal,EndOfBuffer:PiChatNormal"
+    vim.wo[backdrop.win].cursorline = false
+    vim.wo[backdrop.win].number = false
+    vim.wo[backdrop.win].relativenumber = false
+    vim.wo[backdrop.win].signcolumn = "no"
+  end)
+end
+
+function M.close_backdrop()
+  if backdrop.win and vim.api.nvim_win_is_valid(backdrop.win) then
+    pcall(vim.api.nvim_win_close, backdrop.win, true)
+  end
+  backdrop.win = nil
+  if backdrop.buf and vim.api.nvim_buf_is_valid(backdrop.buf) then
+    pcall(vim.api.nvim_buf_delete, backdrop.buf, { force = true })
+  end
+  backdrop.buf = nil
+end
+
+--- Hide NvimTree while agent UI is up (optional; backdrop covers the rest).
+function M.conceal_explorer()
+  tree_was_open = false
+  pcall(function()
+    local api = require("nvim-tree.api")
+    if api.tree.is_visible() then
+      tree_was_open = true
+      api.tree.close()
+    end
+  end)
+end
+
+function M.restore_explorer()
+  if not tree_was_open then
+    return
+  end
+  tree_was_open = false
+  pcall(function()
+    require("nvim-tree.api").tree.open()
+  end)
+end
 
 local function remember_editor()
   local cur = vim.api.nvim_get_current_win()
@@ -601,6 +682,8 @@ function M.open()
     return
   end
   ensure_hl()
+  M.conceal_explorer()
+  M.ensure_backdrop()
   require("pi.runtime").ensure_started()
   local g = chat_geometry()
   local title = ""
@@ -648,6 +731,8 @@ function M.close()
     pcall(vim.api.nvim_win_close, wins.chat, true)
   end
   wins = { chat = nil, input = nil, todos = nil }
+  M.close_backdrop()
+  M.restore_explorer()
 end
 
 function M.toggle()

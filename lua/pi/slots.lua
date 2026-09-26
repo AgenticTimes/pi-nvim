@@ -1168,6 +1168,9 @@ function M.apply_layout()
   if #slots == 0 then
     return
   end
+  pcall(function()
+    require("pi.ui").ensure_backdrop()
+  end)
   ensure_slot_hl()
   ensure_slot_hl_autocmd()
   -- Close parked floats first
@@ -1305,10 +1308,13 @@ function M.show()
     bind_primary(p)
     require("pi.ui").adopt_chat_buf(p.chat_buf)
   end
+  local ui = require("pi.ui")
+  ui.conceal_explorer()
+  ui.ensure_backdrop()
   -- ui.open paints primary buf; apply_layout applies per-slot colored borders
-  require("pi.ui").open()
+  ui.open()
   if p then
-    p.win = require("pi.ui").chat_win()
+    p.win = ui.chat_win()
   end
   visible = true
   M.apply_layout()
@@ -1323,7 +1329,8 @@ function M.hide()
     end
     slot.win = nil
   end
-  require("pi.ui").close()
+  local ui = require("pi.ui")
+  ui.close()
   visible = false
 end
 
