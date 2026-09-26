@@ -41,6 +41,7 @@ package.loaded["pi.runtime"] = {
   prompt = function() end,
   abort = function() end,
 }
+package.loaded["pi.render"] = nil
 package.loaded["pi.ui"] = nil
 local ui = require("pi.ui")
 ui.open()

@@ -114,4 +114,7 @@ h.assert_truthy(_G.__pi_chat_lines[#_G.__pi_chat_lines]:find("150k"), "shows bef
 
 -- cleanup job
 package.loaded["pi.client"].stop()
+package.loaded["pi.render"] = nil
+package.loaded["pi.ui"] = nil
+package.loaded["pi.runtime"] = nil
 print("OK compact_test")

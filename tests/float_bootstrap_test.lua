@@ -44,4 +44,7 @@ h.assert_truthy(blend and blend > 0, "winblend > 0 for float layout")
 
 ui.close()
 h.assert_false(ui.is_open(), "closed")
+package.loaded["pi.render"] = nil
+package.loaded["pi.runtime"] = nil
+package.loaded["pi.ui"] = nil
 print("OK float_bootstrap_test")
