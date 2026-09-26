@@ -150,3 +150,7 @@ end, {
   end,
   desc = "Cycle or set pi approve mode",
 })
+
+vim.api.nvim_create_user_command("PiToggleIdle", function()
+  require("pi.slots").toggle_idle()
+end, { desc = "Hide or show all idle (not working) slot windows" })

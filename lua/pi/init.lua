@@ -38,6 +38,11 @@ function M.setup(opts)
       require("pi.slots").cycle_primary(1)
     end, { desc = "pi: cycle primary slot" })
   end
+  if keys.slot_idle then
+    vim.keymap.set("n", keys.slot_idle, function()
+      require("pi.slots").toggle_idle()
+    end, { desc = "pi: hide/show idle slots" })
+  end
   if cfg.bootstrap then
     vim.api.nvim_create_autocmd("VimEnter", {
       once = true,
@@ -135,6 +140,10 @@ end
 
 function M.toggle_auto_compaction()
   return require("pi.runtime").toggle_auto_compaction()
+end
+
+function M.toggle_idle()
+  return require("pi.slots").toggle_idle()
 end
 
 return M

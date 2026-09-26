@@ -11,6 +11,7 @@ local M = {}
 ---@field session_name string|nil
 ---@field goal string|nil user objective (title layer 1)
 ---@field activity string|nil current action (title layer 2)
+---@field parked boolean|nil hidden while idle (toggle_idle)
 
 local slots = {} ---@type PiSlot[]
 local primary_id ---@type integer|nil
@@ -206,6 +207,38 @@ local function ids()
     out[#out + 1] = s.id
   end
   return out
+end
+
+local function slot_busy(s)
+  return s.status == "busy" or s.status == "streaming"
+end
+
+--- Slot ids participating in the float layout (excludes parked idle).
+local function layout_ids()
+  local out = {}
+  for _, s in ipairs(slots) do
+    if not s.parked then
+      out[#out + 1] = s.id
+    end
+  end
+  return out
+end
+
+local function close_slot_win(slot)
+  if slot.win and vim.api.nvim_win_is_valid(slot.win) then
+    pcall(vim.api.nvim_win_close, slot.win, true)
+  end
+  slot.win = nil
+end
+
+--- Busy slots always unpark and show.
+local function unpark_if_busy(slot)
+  if slot and slot_busy(slot) and slot.parked then
+    slot.parked = false
+    if visible then
+      M.apply_layout()
+    end
+  end
 end
 
 local function make_chat_buf(name)
@@ -463,6 +496,14 @@ function M.on_primary_event(ev)
     return
   end
   apply_activity(p, ev)
+  if ev.type == "agent_start" or ev.type == "turn_start" or ev.type == "message_update" or ev.type == "tool_execution_start" then
+    if p.status ~= "busy" then
+      p.status = "busy"
+    end
+  elseif ev.type == "agent_end" or ev.type == "agent_settled" then
+    p.status = "idle"
+  end
+  unpark_if_busy(p)
   refresh_slot_title(p)
 end
 
@@ -652,6 +693,7 @@ local function satellite_on_event(slot, ev)
     end
   end
   apply_activity(slot, ev)
+  unpark_if_busy(slot)
   pcall(function()
     require("pi.render").on_event(slot.chat_buf, ev)
   end)
@@ -939,48 +981,130 @@ function M.apply_layout()
   end
   ensure_slot_hl()
   ensure_slot_hl_autocmd()
+  -- Close parked floats first
+  for _, slot in ipairs(slots) do
+    if slot.parked then
+      close_slot_win(slot)
+    end
+  end
+  local shown = layout_ids()
+  if #shown == 0 then
+    return
+  end
+  local layout_primary = primary_id
+  if not layout_primary or (find(layout_primary) and find(layout_primary).parked) then
+    layout_primary = shown[1]
+  end
   local layout = M.compute_layout({
     cols = vim.o.columns,
     lines = vim.o.lines,
     chrome = chrome_rows(),
-    ids = ids(),
-    primary = primary_id,
+    ids = shown,
+    primary = layout_primary,
   })
   local ui = require("pi.ui")
   for _, slot in ipairs(slots) do
-    local g = layout[slot.id]
-    if g then
-      local focused = slot.id == primary_id
-      local cfg = {
-        relative = "editor",
-        width = g.width,
-        height = g.height,
-        row = g.row,
-        col = g.col,
-        style = "minimal",
-        border = border_for(slot, focused),
-        title = title_for(slot),
-        title_pos = "center",
-        zindex = g.zindex,
-      }
-      if slot.win and vim.api.nvim_win_is_valid(slot.win) then
-        pcall(vim.api.nvim_win_set_config, slot.win, cfg)
-      else
-        slot.win = vim.api.nvim_open_win(slot.chat_buf, focused, cfg)
-      end
-      configure_win(slot.win, slot, focused)
-      if focused then
-        ui.adopt_chat_win(slot.win, slot.chat_buf)
-        pcall(function()
-          require("pi.render").attach_scroll(slot.win, slot.chat_buf)
-          require("pi.render").follow(slot.chat_buf, true, slot.win)
-        end)
+    if not slot.parked then
+      local g = layout[slot.id]
+      if g then
+        local focused = slot.id == primary_id or slot.id == layout_primary
+        local cfg = {
+          relative = "editor",
+          width = g.width,
+          height = g.height,
+          row = g.row,
+          col = g.col,
+          style = "minimal",
+          border = border_for(slot, focused),
+          title = title_for(slot),
+          title_pos = "center",
+          zindex = g.zindex,
+        }
+        if slot.win and vim.api.nvim_win_is_valid(slot.win) then
+          pcall(vim.api.nvim_win_set_config, slot.win, cfg)
+        else
+          slot.win = vim.api.nvim_open_win(slot.chat_buf, focused, cfg)
+        end
+        configure_win(slot.win, slot, focused)
+        if focused then
+          ui.adopt_chat_win(slot.win, slot.chat_buf)
+          pcall(function()
+            require("pi.render").attach_scroll(slot.win, slot.chat_buf)
+            require("pi.render").follow(slot.chat_buf, true, slot.win)
+          end)
+        end
       end
     end
   end
   pcall(function()
     require("pi.statusline").repaint()
   end)
+end
+
+--- Hide or re-show every idle (not working) slot window. Busy slots stay.
+--- Toggle: idle visible → park them; idle parked → restore.
+---@return string "hidden"|"shown"|"noop"
+function M.toggle_idle()
+  M.ensure_default()
+  if not visible then
+    M.show()
+  end
+  local idle = {}
+  local busy_n = 0
+  for _, s in ipairs(slots) do
+    if slot_busy(s) then
+      busy_n = busy_n + 1
+      s.parked = false
+    else
+      idle[#idle + 1] = s
+    end
+  end
+  if #idle == 0 then
+    vim.notify("pi: no idle slots", vim.log.levels.INFO)
+    return "noop"
+  end
+  local any_shown = false
+  for _, s in ipairs(idle) do
+    if not s.parked then
+      any_shown = true
+      break
+    end
+  end
+  if any_shown then
+    for _, s in ipairs(idle) do
+      -- Keep at least one float if nothing is busy
+      if busy_n == 0 and s.id == primary_id then
+        s.parked = false
+      else
+        s.parked = true
+        close_slot_win(s)
+      end
+    end
+    local p = M.primary()
+    if p and p.parked then
+      for _, s in ipairs(slots) do
+        if not s.parked then
+          M.set_primary(s.id)
+          break
+        end
+      end
+    end
+    M.apply_layout()
+    local n = 0
+    for _, s in ipairs(idle) do
+      if s.parked then
+        n = n + 1
+      end
+    end
+    vim.notify(string.format("pi: hid %d idle slot(s)", n), vim.log.levels.INFO)
+    return "hidden"
+  end
+  for _, s in ipairs(idle) do
+    s.parked = false
+  end
+  M.apply_layout()
+  vim.notify(string.format("pi: showed %d idle slot(s)", #idle), vim.log.levels.INFO)
+  return "shown"
 end
 
 function M.show()

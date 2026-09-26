@@ -34,6 +34,7 @@ M.opts = {
     slot_new = "<leader>a+",
     slot_close = "<leader>a_",
     slot_cycle = "<leader>a>",
+    slot_idle = "<leader>a.",
   },
   --- Global summon/hide (M1 primary float). Independent of keys.toggle.
   summon_key = "<C-Space>",
