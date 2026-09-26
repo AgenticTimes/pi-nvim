@@ -13,6 +13,21 @@ local hydrate_opts ---@type table|nil
 local pending_hydrate_path ---@type string|nil
 local skip_switch_hydrate = false
 local HYDRATE_ID = "hydrate-msgs"
+--- After interrupt: re-send abort if turn starts in this window (ns, vim.uv.hrtime).
+local abort_guard_until = 0
+local abort_seq = 0
+
+local function send_abort_rpc()
+  local client = require("pi.client")
+  if not client.is_running() then
+    return false
+  end
+  client.send({ type = "abort" })
+  pcall(function()
+    client.send({ type = "abort_bash" })
+  end)
+  return true
+end
 
 local function apply_hydrate(data, opts)
   opts = opts or {}
@@ -57,6 +72,17 @@ local function hydrate_from_path(path, opts)
 end
 
 local function on_event(ev)
+  -- Cover pi race: abort before Agent.activeRun exists returns success, then
+  -- the turn still starts. Re-abort immediately if activity resumes in the
+  -- guard window after interrupt.
+  if abort_guard_until > 0 and (vim.uv.hrtime() < abort_guard_until) then
+    if ev.type == "agent_start" or ev.type == "turn_start" then
+      send_abort_rpc()
+    end
+  elseif abort_guard_until > 0 then
+    abort_guard_until = 0
+  end
+
   require("pi.session").on_event(ev)
   require("pi.events").fire(ev)
   pcall(function()
@@ -333,23 +359,27 @@ function M.follow_up(message)
 end
 
 --- Abort in-flight LLM turn (+ bash tools). Does not kill the RPC job.
+--- Retries briefly: pi can ack abort before activeRun exists, then continue.
 ---@return boolean sent true if abort RPC was delivered
 function M.abort()
-  local client = require("pi.client")
-  local sent = false
-  if client.is_running() then
-    -- abort: cancel LLM stream; abort_bash: kill in-flight shell tools
-    client.send({ type = "abort" })
-    pcall(function()
-      client.send({ type = "abort_bash" })
-    end)
-    sent = true
-  end
+  local sent = send_abort_rpc()
   require("pi.session").set_status("idle")
   pcall(function()
     require("pi.statusline").stop()
   end)
   if sent then
+    abort_seq = abort_seq + 1
+    local seq = abort_seq
+    -- ~2s guard: catch turn_start/agent_start that slip past the first abort
+    abort_guard_until = vim.uv.hrtime() + (2 * 1e9)
+    for _, delay in ipairs({ 80, 250, 700, 1500 }) do
+      vim.defer_fn(function()
+        if seq ~= abort_seq then
+          return
+        end
+        send_abort_rpc()
+      end, delay)
+    end
     vim.notify("pi: interrupted", vim.log.levels.INFO)
   else
     vim.notify("pi: interrupt ignored (RPC not running)", vim.log.levels.WARN)
