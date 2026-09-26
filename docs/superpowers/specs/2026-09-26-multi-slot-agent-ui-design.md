@@ -17,19 +17,18 @@
 ## Layout (target)
 
 ```
-┌──────── satellite ─┐┌──── satellite ────┐
-│ slot B (mini)      ││ slot C (mini)     │
-└────────────────────┘└───────────────────┘
-┌─────────────────────────────────────────┐
-│                                         │
-│          PRIMARY (slot A)               │
-│          translucent float              │
-│                                         │
-└─────────────────────────────────────────┘
+┌─────────────────────────────┬──────────┐
+│                             │ ○ #2     │
+│   ● #1 · focus              ├──────────┤
+│   (enlarged / blue border)  │ ○ #3     │
+│                             ├──────────┤
+│                             │ ○ #4     │
+└─────────────────────────────┴──────────┘
 ```
 
+- Focused slot = master (≈66% width, full height, blue border, title `· focus`).
+- Others stack on the right; click / Enter promotes → that slot enlarges.
 - `<C-Space>`: if any slot UI hidden → show layout; if shown → hide all (jobs keep running).
-- Focus primary for input; click/keymap to promote a satellite to primary.
 
 ## Phases
 

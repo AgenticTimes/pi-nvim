@@ -35,9 +35,9 @@ local function chrome_rows()
   return cmd + status + spare
 end
 
---- Pure layout math (testable). Satellites on top row; primary below.
+--- Pure layout math (testable). Focused master left (~68%); others stack right.
 ---@param opts { cols: integer, lines: integer, chrome?: integer, ids: integer[], primary: integer, margin?: integer }
----@return table<integer, { row: integer, col: integer, width: integer, height: integer, border: string, zindex: integer }>
+---@return table<integer, { row: integer, col: integer, width: integer, height: integer, border: string, zindex: integer, focused: boolean }>
 function M.compute_layout(opts)
   local cols = opts.cols
   local lines = opts.lines
@@ -61,36 +61,41 @@ function M.compute_layout(opts)
       width = usable_w,
       height = usable_h,
       border = "rounded",
-      zindex = 50,
+      zindex = 52,
+      focused = true,
     }
     return out
   end
   local gap = 1
-  local sat_h = math.max(4, math.floor(usable_h * 0.28))
-  local prim_h = math.max(6, usable_h - sat_h - gap)
+  -- Side stack: readable mini panes; master takes the rest and full height.
+  local stack_w = math.max(22, math.min(math.floor(usable_w * 0.34), math.floor(usable_w * 0.42)))
+  local master_w = math.max(24, usable_w - stack_w - gap)
   local n = #sats
-  local sat_w = math.max(12, math.floor((usable_w - (n - 1) * gap) / n))
+  local cell_h = math.max(5, math.floor((usable_h - (n - 1) * gap) / n))
   for i, id in ipairs(sats) do
-    local col = margin + (i - 1) * (sat_w + gap)
+    local row = margin + (i - 1) * (cell_h + gap)
+    local h = cell_h
     if i == n then
-      sat_w = math.max(12, usable_w - (col - margin))
+      h = math.max(5, usable_h - (row - margin))
     end
     out[id] = {
-      row = margin,
-      col = col,
-      width = sat_w,
-      height = sat_h,
+      row = row,
+      col = margin + master_w + gap,
+      width = stack_w,
+      height = h,
       border = "rounded",
       zindex = 48,
+      focused = false,
     }
   end
   out[primary] = {
-    row = margin + sat_h + gap,
+    row = margin,
     col = margin,
-    width = usable_w,
-    height = prim_h,
+    width = master_w,
+    height = usable_h,
     border = "rounded",
-    zindex = 50,
+    zindex = 52,
+    focused = true,
   }
   return out
 end
@@ -124,9 +129,35 @@ end
 local focus_autocmd ---@type integer|nil
 
 local function title_for(slot)
-  local dot = (slot.status == "busy" or slot.status == "streaming") and "●" or "○"
-  local tag = slot.id == primary_id and "PRIMARY" or ("#" .. tostring(slot.id))
-  return string.format(" %s %s ", dot, tag)
+  local busy = slot.status == "busy" or slot.status == "streaming"
+  local dot = busy and "●" or "○"
+  if slot.id == primary_id then
+    return string.format(" %s #%d · focus ", dot, slot.id)
+  end
+  return string.format(" %s #%d ", dot, slot.id)
+end
+
+local function ensure_slot_hl()
+  -- Focus: bright blue border; idle: muted gray
+  vim.api.nvim_set_hl(0, "PiSlotFocusBorder", { fg = 0x7aa2f7, bold = true })
+  vim.api.nvim_set_hl(0, "PiSlotIdleBorder", { fg = 0x565f89 })
+  vim.api.nvim_set_hl(0, "PiSlotFocusTitle", { fg = 0x7aa2f7, bold = true })
+  vim.api.nvim_set_hl(0, "PiSlotIdleTitle", { fg = 0x565f89 })
+end
+
+---@param focused boolean
+local function border_for(focused)
+  local hl = focused and "PiSlotFocusBorder" or "PiSlotIdleBorder"
+  return {
+    { "╭", hl },
+    { "─", hl },
+    { "╮", hl },
+    { "│", hl },
+    { "╯", hl },
+    { "─", hl },
+    { "╰", hl },
+    { "│", hl },
+  }
 end
 
 --- Any slot window can interact: focus → primary, Enter → ask that agent.
@@ -188,19 +219,21 @@ local function ensure_focus_autocmd()
   })
 end
 
-local function configure_win(win)
+local function configure_win(win, focused)
   if not win or not vim.api.nvim_win_is_valid(win) then
     return
   end
   vim.wo[win].wrap = true
   vim.wo[win].linebreak = true
   vim.wo[win].signcolumn = "no"
-  local blend = tonumber((require("pi.config").opts.window or {}).winblend) or 18
+  local base = tonumber((require("pi.config").opts.window or {}).winblend) or 18
+  local blend = focused and math.max(0, base - 6) or math.min(40, base + 12)
   pcall(function()
     vim.wo[win].winblend = blend
   end)
+  local border_hl = focused and "PiSlotFocusBorder" or "PiSlotIdleBorder"
   pcall(function()
-    vim.wo[win].winhl = "Normal:PiChatNormal,NormalFloat:PiChatNormal,FloatBorder:PiChatBorder"
+    vim.wo[win].winhl = "Normal:PiChatNormal,NormalFloat:PiChatNormal,FloatBorder:" .. border_hl
   end)
 end
 
@@ -412,6 +445,7 @@ function M.apply_layout()
   if #slots == 0 then
     return
   end
+  ensure_slot_hl()
   local layout = M.compute_layout({
     cols = vim.o.columns,
     lines = vim.o.lines,
@@ -423,6 +457,7 @@ function M.apply_layout()
   for _, slot in ipairs(slots) do
     local g = layout[slot.id]
     if g then
+      local focused = slot.id == primary_id
       local cfg = {
         relative = "editor",
         width = g.width,
@@ -430,7 +465,7 @@ function M.apply_layout()
         row = g.row,
         col = g.col,
         style = "minimal",
-        border = g.border,
+        border = border_for(focused),
         title = title_for(slot),
         title_pos = "center",
         zindex = g.zindex,
@@ -438,11 +473,10 @@ function M.apply_layout()
       if slot.win and vim.api.nvim_win_is_valid(slot.win) then
         pcall(vim.api.nvim_win_set_config, slot.win, cfg)
       else
-        local focus = slot.id == primary_id
-        slot.win = vim.api.nvim_open_win(slot.chat_buf, focus, cfg)
+        slot.win = vim.api.nvim_open_win(slot.chat_buf, focused, cfg)
       end
-      configure_win(slot.win)
-      if slot.id == primary_id then
+      configure_win(slot.win, focused)
+      if focused then
         ui.adopt_chat_win(slot.win, slot.chat_buf)
         pcall(function()
           require("pi.render").attach_scroll(slot.win, slot.chat_buf)
