@@ -16,6 +16,8 @@ local HYDRATE_ID = "hydrate-msgs"
 --- After interrupt: re-send abort if turn starts in this window (ns, vim.uv.hrtime).
 local abort_guard_until = 0
 local abort_seq = 0
+local hard_kill_armed = false
+local ABORT_CHECK_ID = "abort-check"
 
 local function send_abort_rpc()
   local client = require("pi.client")
@@ -27,6 +29,20 @@ local function send_abort_rpc()
     client.send({ type = "abort_bash" })
   end)
   return true
+end
+
+local function force_stop_rpc(reason)
+  hard_kill_armed = false
+  abort_guard_until = 0
+  local client = require("pi.client")
+  if client.is_running() then
+    client.stop()
+  end
+  require("pi.session").set_status("idle")
+  pcall(function()
+    require("pi.statusline").stop()
+  end)
+  vim.notify("pi: force-stopped RPC (" .. (reason or "interrupt") .. ")", vim.log.levels.WARN)
 end
 
 local function apply_hydrate(data, opts)
@@ -74,13 +90,28 @@ end
 local function on_event(ev)
   -- Cover pi race: abort before Agent.activeRun exists returns success, then
   -- the turn still starts. Re-abort immediately if activity resumes in the
-  -- guard window after interrupt.
-  if abort_guard_until > 0 and (vim.uv.hrtime() < abort_guard_until) then
+  -- guard window after interrupt. If tokens still stream, hard-kill the job.
+  if hard_kill_armed or (abort_guard_until > 0 and vim.uv.hrtime() < abort_guard_until) then
     if ev.type == "agent_start" or ev.type == "turn_start" then
       send_abort_rpc()
+    elseif ev.type == "message_update" and hard_kill_armed then
+      force_stop_rpc("still streaming")
+      return
+    elseif ev.type == "agent_end" or ev.type == "agent_settled" then
+      hard_kill_armed = false
     end
   elseif abort_guard_until > 0 then
     abort_guard_until = 0
+  end
+
+  if ev.type == "response" and ev.id == ABORT_CHECK_ID then
+    local streaming = ev.success and ev.data and ev.data.isStreaming
+    if hard_kill_armed and streaming then
+      force_stop_rpc("still busy")
+    elseif hard_kill_armed and not streaming then
+      hard_kill_armed = false
+    end
+    return
   end
 
   require("pi.session").on_event(ev)
@@ -358,7 +389,8 @@ function M.follow_up(message)
   require("pi.client").send({ type = "follow_up", message = message })
 end
 
---- Abort in-flight LLM turn (+ bash tools). Does not kill the RPC job.
+--- Abort in-flight LLM turn (+ bash tools). Does not kill the RPC job unless
+--- the soft abort fails (tokens keep arriving / still streaming).
 --- Retries briefly: pi can ack abort before activeRun exists, then continue.
 ---@return boolean sent true if abort RPC was delivered
 function M.abort()
@@ -370,8 +402,9 @@ function M.abort()
   if sent then
     abort_seq = abort_seq + 1
     local seq = abort_seq
-    -- ~2s guard: catch turn_start/agent_start that slip past the first abort
-    abort_guard_until = vim.uv.hrtime() + (2 * 1e9)
+    hard_kill_armed = true
+    -- ~2.5s guard: catch turn_start/agent_start and late streaming
+    abort_guard_until = vim.uv.hrtime() + (2.5 * 1e9)
     for _, delay in ipairs({ 80, 250, 700, 1500 }) do
       vim.defer_fn(function()
         if seq ~= abort_seq then
@@ -380,6 +413,25 @@ function M.abort()
         send_abort_rpc()
       end, delay)
     end
+    -- If still streaming after soft retries, force-kill the pi job
+    vim.defer_fn(function()
+      if seq ~= abort_seq or not hard_kill_armed then
+        return
+      end
+      local client = require("pi.client")
+      if client.is_running() then
+        pcall(function()
+          client.send({ type = "get_state", id = ABORT_CHECK_ID })
+        end)
+      end
+    end, 900)
+    vim.defer_fn(function()
+      if seq ~= abort_seq or not hard_kill_armed then
+        return
+      end
+      -- Absolute fallback: jobstop so HTTP cannot continue
+      force_stop_rpc("timeout")
+    end, 2000)
     vim.notify("pi: interrupted", vim.log.levels.INFO)
   else
     vim.notify("pi: interrupt ignored (RPC not running)", vim.log.levels.WARN)
