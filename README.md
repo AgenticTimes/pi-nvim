@@ -8,6 +8,10 @@ Neovim-native frontend for [pi](https://github.com/earendil-works/pi) coding age
 
 **Wave 3:** approve modes (`ask`/`smart`/`auto`/`deny` + Always) · `#` skills · hunk `ah`/`rh`/`]h`/`[h` · `:PiExportHtml` · `:PiInspect` · `@visible` · chat/auto · focus · session name · **resume last session** (same cwd).
 
+## Demo
+
+![pi.nvim multi-slot / subagent demo](demo.gif)
+
 ## Requirements
 
 - Neovim ≥ 0.10
