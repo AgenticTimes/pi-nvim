@@ -37,6 +37,21 @@ h.assert_false(cmd:find("%-t ", 1, false) or cmd:find(" -t ", 1, true), "no tool
 h.assert_truthy(cmd:find("exclude%-tools", 1, false) or cmd:find("exclude-tools", 1, true), "excludes edit/write")
 h.assert_truthy(cmd:find("edit,write", 1, true) or cmd:find("edit", 1, true), "exclude list present")
 h.assert_truthy(not cmd:find("%-%-no%-tools"), "auto not no-tools")
+h.assert_truthy(cmd:find("%-%-no%-extensions", 1, false) or cmd:find("--no-extensions", 1, true), "discovery off")
+
+-- extensions whitelist → extra -e after host tools
+package.loaded["pi.config"] = nil
+package.loaded["pi.runtime"] = nil
+started = {}
+require("pi.config").setup({
+  mode = "auto",
+  extensions = { "npm:@tintinweb/pi-subagents" },
+})
+runtime = require("pi.runtime")
+runtime.ensure_started()
+local with_ext = table.concat(started[#started], " ")
+h.assert_truthy(with_ext:find("npm:@tintinweb/pi%-subagents", 1, false) or with_ext:find("npm:@tintinweb/pi-subagents", 1, true), "whitelist -e: " .. with_ext)
+h.assert_truthy(with_ext:find("nvim_host_tools", 1, true), "host tools still loaded")
 
 -- empty tools_exclude → full builtins including edit/write
 package.loaded["pi.config"] = nil

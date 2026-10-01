@@ -175,8 +175,28 @@ function M.handle(req)
   end
 
   if method == "notify" then
-    vim.notify(tostring(req.message or req.title or "pi notify"), vim.log.levels.INFO)
+    -- Never dump raw extension notify bodies (can be huge / JSON); quiet path.
+    local msg = tostring(req.message or req.title or "")
+    if not msg:find("maxSerial", 1, true) and #msg < 300 then
+      require("pi.notify").soft_notify(msg, vim.log.levels.INFO)
+    end
     respond(req.id, { ok = true })
+    return true
+  end
+
+  -- Fire-and-forget RPC UI. Never vim.notify widget/status bodies: pi-subagents
+  -- Fleet projections are multi-line JSON (incl. maxSerializedBytes) and will
+  -- trip Neovim's hit-enter prompt ("Press ENTER to continue").
+  if method == "setWidget" or method == "set_widget" then
+    if require("pi.subagent_wins").handle_ui_request(req) then
+      return true
+    end
+    return true
+  end
+  if method == "setStatus" or method == "set_status" then
+    return true
+  end
+  if method == "setTitle" or method == "set_title" then
     return true
   end
 

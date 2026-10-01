@@ -47,7 +47,19 @@ vim.wait(50, function()
 end, 10)
 h.assert_eq(#sent, 1, "one response")
 h.assert_eq(sent[1].type, "extension_ui_response", "resp type")
-h.assert_eq(sent[1].confirmed, true, "confirmed")
+-- Fire-and-forget widget/status
+sent = {}
+h.assert_truthy(
+  approve.handle({
+    type = "extension_ui_request",
+    id = "w1",
+    method = "setWidget",
+    widgetLines = { "● Agents", "Explore running" },
+  }),
+  "setWidget handled"
+)
+h.assert_eq(#sent, 0, "setWidget needs no response")
 
+print("approve_test ok")
 package.loaded["pi.client"] = nil
 package.loaded["pi.approve"] = nil

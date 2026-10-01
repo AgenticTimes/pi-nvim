@@ -3,7 +3,7 @@ local M = {}
 
 ---@class PiSlot
 ---@field id integer
----@field client table
+---@field client table|nil nil for viewer-only (subagent monitor)
 ---@field chat_buf integer
 ---@field win integer|nil
 ---@field status string
@@ -12,6 +12,12 @@ local M = {}
 ---@field goal string|nil user objective (title layer 1)
 ---@field activity string|nil current action (title layer 2)
 ---@field parked boolean|nil hidden while idle (toggle_idle)
+---@field is_viewer boolean|nil no RPC job; monitors subagent artifacts
+---@field run_id string|nil
+---@field agent string|nil
+---@field async_dir string|nil
+---@field artifact_path string|nil
+---@field kind string|nil
 
 local slots = {} ---@type PiSlot[]
 local primary_id ---@type integer|nil
@@ -402,8 +408,12 @@ local function make_chat_buf(name)
   local render = require("pi.render")
   local b = vim.api.nvim_create_buf(false, true)
   pcall(vim.api.nvim_buf_set_name, b, name)
-  render.setup(b)
-  render.reset(b)
+  pcall(function()
+    render.setup(b)
+  end)
+  pcall(function()
+    render.reset(b)
+  end)
   return b
 end
 
@@ -604,11 +614,19 @@ function M.format_title(slot, max_w)
   local busy = slot.status == "busy" or slot.status == "streaming"
   local dot = busy and "●" or "○"
   local parts = { string.format("%s #%d", dot, slot.id) }
+  if slot.is_viewer or slot.kind == "subagent" then
+    parts[1] = string.format("%s #%d◇", dot, slot.id)
+  end
   local goal = slot.goal
   if not goal or goal == "" then
     goal = session_label(slot)
   end
-  if goal and goal ~= "" then
+  if slot.agent and slot.agent ~= "" and slot.is_viewer then
+    parts[#parts + 1] = slot.agent
+  end
+  if goal and goal ~= "" and goal ~= slot.agent then
+    parts[#parts + 1] = goal
+  elseif goal and goal ~= "" and not slot.is_viewer then
     parts[#parts + 1] = goal
   end
   local act = slot.activity
@@ -782,6 +800,10 @@ local function ensure_focus_autocmd()
       local win = vim.api.nvim_get_current_win()
       for _, s in ipairs(slots) do
         if s.win == win and s.id ~= primary_id then
+          -- Viewer floats are look-only; keep RPC primary on a real agent slot.
+          if s.is_viewer then
+            return
+          end
           M.set_primary(s.id)
           return
         end
@@ -919,10 +941,16 @@ local function satellite_on_event(slot, ev)
 end
 
 local function bind_primary(slot)
+  if not slot or slot.is_viewer or not slot.client then
+    return
+  end
   require("pi.runtime").bind_events(slot.client)
 end
 
 local function bind_satellite(slot)
+  if not slot or slot.is_viewer or not slot.client then
+    return
+  end
   slot.client.set_on_event(function(ev)
     satellite_on_event(slot, ev)
   end)
@@ -997,7 +1025,7 @@ end
 function M.primary_client()
   local s = M.primary()
   -- Default slot always resolves live (tests stub package.loaded["pi.client"]).
-  if not s or s.is_default then
+  if not s or s.is_default or s.is_viewer or not s.client then
     return default_client()
   end
   return s.client
@@ -1010,7 +1038,19 @@ function M.ensure_primary_job()
   if not p then
     return nil
   end
+  if p.is_viewer then
+    for _, s in ipairs(slots) do
+      if s.is_default then
+        primary_id = s.id
+        p = s
+        break
+      end
+    end
+  end
   local client = p.is_default and default_client() or p.client
+  if not client then
+    return default_client()
+  end
   if client.is_running() then
     return client
   end
@@ -1135,6 +1175,66 @@ function M.create()
   return slot
 end
 
+--- Viewer satellite: no pi RPC job. Used to monitor subagent runs.
+---@param opts { run_id?: string, agent?: string, goal?: string, async_dir?: string }
+---@return table|nil, string|nil
+function M.create_viewer(opts)
+  opts = opts or {}
+  M.ensure_default()
+  local cap = M.capacity({
+    cols = vim.o.columns,
+    lines = vim.o.lines,
+    chrome = chrome_rows(),
+  })
+  if #slots >= cap then
+    return nil, string.format("no room (capacity %d at min cell); close one with a_", cap)
+  end
+  local id = next_id
+  next_id = next_id + 1
+  local label = opts.agent or "subagent"
+  local buf = make_chat_buf("pi://subagent/" .. tostring(id))
+  -- make_chat_buf seeds "# pi chat"; viewer is not the main chat.
+  pcall(vim.api.nvim_buf_set_lines, buf, 0, -1, false, {
+    string.format("── %s ──", label),
+    "",
+  })
+  local slot = {
+    id = id,
+    client = nil,
+    chat_buf = buf,
+    win = nil,
+    status = "busy",
+    session_name = label,
+    goal = opts.goal or label,
+    is_default = false,
+    is_viewer = true,
+    kind = "subagent",
+    run_id = opts.run_id,
+    agent = label,
+    async_dir = opts.async_dir,
+    activity = "running",
+  }
+  slots[#slots + 1] = slot
+  map_slot_keys(slot)
+  ensure_focus_autocmd()
+  if visible or require("pi.ui").is_open() then
+    visible = true
+    local p = M.primary()
+    if p and (not p.win or not vim.api.nvim_win_is_valid(p.win)) then
+      p.win = require("pi.ui").chat_win()
+    end
+    pcall(M.apply_layout)
+  else
+    -- Open multi-slot UI so the viewer is visible
+    pcall(function()
+      visible = true
+      M.show()
+    end)
+  end
+  require("pi.notify").soft_notify(string.format("subagent #%d · %s", id, label), vim.log.levels.INFO)
+  return slot
+end
+
 function M.close(id)
   id = id or primary_id
   local slot = find(id)
@@ -1154,7 +1254,9 @@ function M.close(id)
     pcall(vim.api.nvim_win_close, slot.win, true)
   end
   if not slot.is_default then
-    pcall(slot.client.stop)
+    if slot.client then
+      pcall(slot.client.stop)
+    end
   end
   local kept = {}
   for _, s in ipairs(slots) do
@@ -1186,6 +1288,13 @@ function M.set_primary(id)
   local slot = find(id)
   if not slot then
     return false
+  end
+  if slot.is_viewer then
+    -- Look only: focus the win, keep RPC on a non-viewer primary.
+    if visible and slot.win and vim.api.nvim_win_is_valid(slot.win) then
+      vim.api.nvim_set_current_win(slot.win)
+    end
+    return true
   end
   if primary_id == id then
     pcall(M.ensure_primary_job)
@@ -1514,7 +1623,7 @@ function M._reset_for_test()
     if s.win and vim.api.nvim_win_is_valid(s.win) then
       pcall(vim.api.nvim_win_close, s.win, true)
     end
-    if not s.is_default then
+    if not s.is_default and s.client then
       pcall(s.client.stop)
     end
   end

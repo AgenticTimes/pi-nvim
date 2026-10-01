@@ -56,10 +56,20 @@ M.opts = {
   show_thinking = true,
   --- "auto" = builtins + nvim host tools; "chat" = --no-tools
   mode = "auto",
-  --- Soft tool preference (pi has no priority API). Default drops disk
+  -- Soft tool preference (pi has no priority API). Default drops disk
   --- edit/write so nvim_replace_in_buffer owns buffer mutations. Set to ""
   --- or {} for a full builtin set including edit/write. bash/read/grep stay on.
   tools_exclude = { "edit", "write" },
+  --- Extra pi extensions to load with `-e` while keeping `--no-extensions`
+  --- (discovery of ~/.pi packages stays off). Each entry is a path, or an
+  --- npm:/git: source string accepted by `pi -e`. Example:
+  ---   { "~/.pi/agent/npm/node_modules/pi-subagents" }
+  extensions = {},
+  --- Open satellite floats when pi-subagents starts (via nvim_subagent_bridge).
+  subagent_windows = true,
+  --- Auto-close finished subagent viewers (false = keep until a_).
+  subagent_window_autoclose = false,
+  subagent_window_autoclose_ms = 8000,
   --- confirm dialogs: ask | smart | auto | deny
   approve = "ask",
   --- after export_html, open the file (edit / system open)

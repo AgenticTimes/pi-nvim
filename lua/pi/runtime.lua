@@ -4,6 +4,10 @@ local function extension_path()
   return require("pi.config").root() .. "/extensions/nvim_host_tools.ts"
 end
 
+local function subagent_bridge_path()
+  return require("pi.config").root() .. "/extensions/nvim_subagent_bridge.ts"
+end
+
 --- Soft preference only: pi has no tool-priority API. Excluding disk edit/write
 --- steers mutations through nvim_* so Accept/Reject still works.
 local DEFAULT_EXCLUDE = "edit,write"
@@ -337,6 +341,24 @@ local function on_event(ev)
   end
 end
 
+--- Append user-configured `-e` sources (whitelist; discovery still off).
+local function append_extra_extensions(cmd)
+  local list = require("pi.config").opts.extensions
+  if type(list) ~= "table" then
+    return
+  end
+  for _, src in ipairs(list) do
+    if type(src) == "string" and src ~= "" then
+      -- Paths get ~ expanded; npm:/git: specs pass through unchanged.
+      local resolved = src
+      if not src:match("^[%w_+-]+@") and not src:match("^npm:") and not src:match("^git:") then
+        resolved = vim.fn.expand(src)
+      end
+      vim.list_extend(cmd, { "-e", resolved })
+    end
+  end
+end
+
 local function build_cmd(opts)
   opts = opts or {}
   local config = require("pi.config")
@@ -356,6 +378,12 @@ local function build_cmd(opts)
     -- No --tools allowlist (that would hide builtins). Optional exclude list
     -- is the only “prefer nvim for edits” knob pi exposes.
     vim.list_extend(cmd, { "-e", ext })
+    -- User extensions (e.g. pi-subagents) first; bridge last so it can
+    -- re-activate `subagent` after pi-subagents' lazy loader hides it.
+    append_extra_extensions(cmd)
+    if config.opts.subagent_windows ~= false then
+      vim.list_extend(cmd, { "-e", subagent_bridge_path() })
+    end
     local exclude = config.opts.tools_exclude
     if exclude == nil then
       exclude = DEFAULT_EXCLUDE
