@@ -10,7 +10,9 @@ Neovim-native frontend for [pi](https://github.com/earendil-works/pi) coding age
 
 ## Demo
 
-![pi.nvim multi-slot / subagent demo](demo.gif)
+<p align="center">
+  <img src="assets/demo.gif" alt="pi.nvim multi-slot / subagent demo" width="800" />
+</p>
 
 ## Requirements
 
