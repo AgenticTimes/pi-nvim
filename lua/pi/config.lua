@@ -38,6 +38,8 @@ M.opts = {
     slot_idle = "<leader>a.",
     --- Promote slot to master: `12<leader>w` or `<leader>w` then digits.
     slot_focus = "<leader>w",
+    --- Solo one slot: `7<leader>m` / `<leader>m`+digits; bare `<leader>m` restores tiles.
+    slot_maximize = "<leader>m",
   },
   --- Global summon/hide (M1 primary float). Independent of keys.toggle.
   summon_key = "<C-Space>",

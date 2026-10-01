@@ -163,3 +163,17 @@ vim.api.nvim_create_user_command("PiSlot", function(opts)
   end
   require("pi.slots").focus_by_id(n)
 end, { nargs = 1, desc = "Promote slot #id to master window" })
+
+vim.api.nvim_create_user_command("PiMaximize", function(opts)
+  local arg = opts.args
+  if arg == "" then
+    require("pi.slots").maximize_ask()
+    return
+  end
+  local n = tonumber(arg)
+  if not n then
+    vim.notify("pi: usage :PiMaximize [id]", vim.log.levels.WARN)
+    return
+  end
+  require("pi.slots").maximize_by_id(n)
+end, { nargs = "?", desc = "Maximize slot #N, or restore tiles if none / already solo" })

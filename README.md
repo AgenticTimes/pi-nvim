@@ -49,12 +49,13 @@ Neovim-native frontend for [pi](https://github.com/earendil-works/pi) coding age
 | `:PiCycleModel` | Cycle model |
 | `:PiCycleThinking` | Cycle thinking level |
 | `:PiFullscreen` | Toggle fullscreen chat |
+| `:PiMaximize [N]` | Solo slot #N / restore tiles |
 | `:PiSessions` | Pick session for cwd (also hydrates chat) |
 | `:PiRun {msg}` | Open UI + prompt |
 | `:PiAcceptAll` / `:PiRejectAll` | Accept / reject all pending |
 | `:PiSlash` | Pick slash command |
 
-On Neovim start (`bootstrap = true`), pi starts in the background with no UI; when ready it notifies `pi ready · <C-Space>`. `<C-Space>` (and `<leader>ai`) toggles the slot layout (translucent float; `window.layout = "float"`). Hiding does not stop jobs. Multi-slot (M2): `<leader>a+` new parallel agent, `<leader>a_` close slot, `<leader>a>` cycle primary, `12<leader>w` or `<leader>w` then digits (or `:PiSlot N`) promote that slot to master, `<leader>a.` / `:PiToggleIdle` hide or show idle slots; primary left, satellites pack right (vertical first, then horizontal) at `slot_min_width` / `slot_min_height`. Capacity = master at min width + sat grid in the rest (ceiling `max_slots`).
+On Neovim start (`bootstrap = true`), pi starts in the background with no UI; when ready it notifies `pi ready · <C-Space>`. `<C-Space>` (and `<leader>ai`) toggles the slot layout (translucent float; `window.layout = "float"`). Hiding does not stop jobs. Multi-slot (M2): `<leader>a+` new parallel agent, `<leader>a_` close slot, `<leader>a>` cycle primary, `12<leader>w` or `<leader>w` then digits (or `:PiSlot N`) promote that slot to master, `<leader>m` then digits (or `7<leader>m` / `:PiMaximize N`) maximize that slot alone — bare `<leader>m` restores the tile layout; `<leader>a.` / `:PiToggleIdle` hide or show idle slots; primary left, satellites pack right (vertical first, then horizontal) at `slot_min_width` / `slot_min_height`. Capacity = master at min width + sat grid in the rest (ceiling `max_slots`).
 
 On first open, if `resume_last = true` (default), switches to the newest session for the current cwd and fills the chat from history. `,aI` / `:PiNewSession` always starts fresh.
 

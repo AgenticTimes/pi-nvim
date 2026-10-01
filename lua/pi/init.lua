@@ -48,6 +48,11 @@ function M.setup(opts)
       require("pi.slots").focus_ask()
     end, { desc = "pi: focus slot #N as master (count or type digits)" })
   end
+  if keys.slot_maximize and keys.slot_maximize ~= "" then
+    vim.keymap.set("n", keys.slot_maximize, function()
+      require("pi.slots").maximize_ask()
+    end, { desc = "pi: maximize slot #N / restore tiles" })
+  end
   if cfg.bootstrap then
     vim.api.nvim_create_autocmd("VimEnter", {
       once = true,
@@ -152,6 +157,13 @@ function M.focus_slot(n)
     return require("pi.slots").focus_ask()
   end
   return require("pi.slots").focus_by_id(n)
+end
+
+function M.maximize_slot(n)
+  if n == nil or n == true then
+    return require("pi.slots").maximize_ask()
+  end
+  return require("pi.slots").maximize_by_id(n)
 end
 
 function M.toggle_idle()
