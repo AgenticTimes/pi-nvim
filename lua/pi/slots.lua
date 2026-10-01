@@ -21,6 +21,7 @@ local M = {}
 
 local slots = {} ---@type PiSlot[]
 local primary_id ---@type integer|nil
+local maximized_id ---@type integer|nil solo float; nil = tiled multi-slot
 local next_id = 1
 local visible = false
 
@@ -616,6 +617,9 @@ function M.format_title(slot, max_w)
   local parts = { string.format("%s #%d", dot, slot.id) }
   if slot.is_viewer or slot.kind == "subagent" then
     parts[1] = string.format("%s #%d◇", dot, slot.id)
+  end
+  if maximized_id == slot.id then
+    parts[1] = parts[1] .. " ✦"
   end
   local goal = slot.goal
   if not goal or goal == "" then
@@ -1265,6 +1269,9 @@ function M.close(id)
     end
   end
   slots = kept
+  if maximized_id == id then
+    maximized_id = nil
+  end
   if primary_id == id then
     primary_id = slots[1] and slots[1].id or nil
     local p = M.primary()
@@ -1423,6 +1430,127 @@ function M.focus_ask()
   return M.focus_by_id(id)
 end
 
+---@return integer|nil
+function M.maximized_id()
+  return maximized_id
+end
+
+--- Exit solo mode and re-tile non-parked slots.
+---@return boolean
+function M.maximize_restore()
+  if not maximized_id then
+    return false
+  end
+  maximized_id = nil
+  if visible or require("pi.ui").is_open() then
+    M.apply_layout()
+  end
+  return true
+end
+
+--- Solo slot #n (full pi area). Same id again while solo → restore.
+---@param n integer
+---@return boolean
+function M.maximize_by_id(n)
+  n = tonumber(n)
+  if not n or n < 1 then
+    return false
+  end
+  if maximized_id == n then
+    return M.maximize_restore()
+  end
+  local slot = find(n)
+  if not slot then
+    vim.notify(string.format("pi: no slot #%d", n), vim.log.levels.WARN)
+    return false
+  end
+  if slot.parked then
+    slot.parked = false
+  end
+  if not visible then
+    M.show()
+  end
+  maximized_id = n
+  if slot.is_viewer then
+    if slot.win and vim.api.nvim_win_is_valid(slot.win) then
+      pcall(vim.api.nvim_set_current_win, slot.win)
+    end
+  else
+    M.set_primary(n)
+  end
+  M.apply_layout()
+  return true
+end
+
+--- Count / digits to solo; bare call while solo restores tiles.
+---@return boolean
+function M.maximize_ask()
+  local n = vim.v.count
+  if n and n > 0 then
+    return M.maximize_by_id(n)
+  end
+  if maximized_id then
+    return M.maximize_restore()
+  end
+  local digits = ""
+  local function echo()
+    vim.api.nvim_echo({ { "pi → maximize #" .. digits .. (digits == "" and "_" or ""), "Question" } }, false, {})
+  end
+  echo()
+  local c = vim.fn.getcharstr()
+  if c == "\x1b" or c == "" then
+    vim.api.nvim_echo({}, false, {})
+    return false
+  end
+  if c == "\r" or c == "\n" then
+    vim.api.nvim_echo({}, false, {})
+    return false
+  end
+  if not c:match("^%d$") then
+    vim.api.nvim_echo({}, false, {})
+    vim.notify("pi: expected slot number", vim.log.levels.WARN)
+    return false
+  end
+  digits = c
+  echo()
+  local max_digits = 3
+  while #digits < max_digits do
+    local got = nil
+    local deadline = vim.uv.hrtime() + 600 * 1000000
+    while vim.uv.hrtime() < deadline do
+      local code = vim.fn.getchar(0)
+      if code ~= 0 and code ~= nil then
+        got = type(code) == "number" and vim.fn.nr2char(code) or tostring(code)
+        break
+      end
+      vim.wait(20, function()
+        return false
+      end, 20, false)
+    end
+    if not got then
+      break
+    end
+    if got == "\x1b" then
+      vim.api.nvim_echo({}, false, {})
+      return false
+    end
+    if got == "\r" or got == "\n" or got == " " then
+      break
+    end
+    if not got:match("^%d$") then
+      break
+    end
+    digits = digits .. got
+    echo()
+  end
+  vim.api.nvim_echo({}, false, {})
+  local id = tonumber(digits)
+  if not id then
+    return false
+  end
+  return M.maximize_by_id(id)
+end
+
 function M.apply_layout()
   if #slots == 0 then
     return
@@ -1440,6 +1568,25 @@ function M.apply_layout()
     end
   end
   local shown = layout_ids()
+  if maximized_id then
+    local keep = false
+    for _, id in ipairs(shown) do
+      if id == maximized_id then
+        keep = true
+        break
+      end
+    end
+    if keep then
+      shown = { maximized_id }
+      for _, slot in ipairs(slots) do
+        if slot.id ~= maximized_id then
+          close_slot_win(slot)
+        end
+      end
+    else
+      maximized_id = nil
+    end
+  end
   if #shown == 0 then
     return
   end
@@ -1629,6 +1776,7 @@ function M._reset_for_test()
   end
   slots = {}
   primary_id = nil
+  maximized_id = nil
   next_id = 1
   visible = false
 end
