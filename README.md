@@ -14,6 +14,8 @@ Neovim-native frontend for [pi](https://github.com/earendil-works/pi) coding age
   <img src="assets/demo.gif" alt="pi.nvim multi-slot / subagent demo" width="800" />
 </p>
 
+Source: [`assets/demo.cast.gz`](assets/demo.cast.gz) (asciinema v3, gzipped).
+
 ## Requirements
 
 - Neovim ≥ 0.10

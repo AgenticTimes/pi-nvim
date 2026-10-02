@@ -8,3 +8,9 @@ demo/_t*.lua
 /.comet/*
 !/.comet/config.yaml
 # <<< Comet managed project state <<<
+
+# Local asciinema sources (commit gzipped copy under assets/)
+/demo.cast
+/demo.merged.cast
+/demo.png
+/demo.cast.gz
