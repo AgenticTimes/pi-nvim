@@ -825,6 +825,11 @@ local function configure_win(win, slot, focused)
   vim.wo[win].breakindent = true
   vim.wo[win].showbreak = ""
   vim.wo[win].signcolumn = "no"
+  pcall(function()
+    -- Match ui.configure_chat_win: smoothscroll fights stream follow.
+    vim.wo[win].smoothscroll = false
+    vim.wo[win].scrolloff = 0
+  end)
   local base = tonumber((require("pi.config").opts.window or {}).winblend) or 0
   -- Multi-slot must stay opaque: any winblend lets neo-tree/explorer bleed through.
   local blend = 0

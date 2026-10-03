@@ -37,6 +37,9 @@ local is_md_sep_row = Rtext.is_md_sep_row
 local align_md_table = Rtext.align_md_table
 local collapse_tool_lines = Rtools.collapse_tool_lines
 local collapse_thinking_lines = Rtools.collapse_thinking_lines
+local is_buffer_edit = Rtools.is_buffer_edit
+local edit_diff_lines = Rtools.edit_diff_lines
+local Wpaths = require("pi.render.write_paths")
 
 -- pending tools by toolCallId → { name, detail, line }
 local pending = {}
@@ -46,6 +49,9 @@ local streaming_assistant = false
 local streaming_thinking = false
 --- After a streamed "\n", the next delta starts a new buffer line (do not merge).
 local stream_at_bol = false
+--- First body row of a freshly opened think/answer box is a chrome placeholder;
+--- the next text delta fills it instead of appending a second blank line.
+local stream_prime_row = false
 local follow_scheduled = false
 --- Cleared only by gg; content updates always force-follow while true
 local stick_bottom = true
@@ -92,7 +98,9 @@ local STYLES = {
     bl = "└",
     br = "┘",
     h = "─",
-    v = "│",
+    -- No side │ — only top/bottom rules + ▌. Vertical rails clutter dense tool
+    -- output (args / error dumps) more than thinking/answer bubbles.
+    v = "",
     bar = "▌",
     bar_hl = "PiToolBar",
     border_hl = "PiToolBorder",
@@ -389,24 +397,30 @@ local function paint_row(buf, ns, row, line, style, inner, avail, is_first, is_l
   if style.bar and style.bar ~= "" then
     left[#left + 1] = { style.bar, style.bar_hl }
   end
-  -- space after │ is part of the inner area (always 1 cell)
-  left[#left + 1] = { style.v .. " ", style.border_hl }
+  if style.v and style.v ~= "" then
+    -- space after │ is part of the inner area (always 1 cell)
+    left[#left + 1] = { style.v .. " ", style.border_hl }
+  else
+    -- No side rail (toolcall): keep one pad cell after ▌ so text still indents.
+    left[#left + 1] = { " ", style.border_hl }
+  end
   pcall(vim.api.nvim_buf_set_extmark, buf, ns, row, 0, {
     line_hl_group = style.body_hl,
     virt_text = left,
     virt_text_pos = "inline",
     priority = 10,
   })
-  -- pin right border to the window edge; repeat on soft-wrapped screen rows
-  -- (without repeat_linebreak, only the first visual row gets │)
-  local right_col = math.max(0, avail - side_w)
-  pcall(vim.api.nvim_buf_set_extmark, buf, ns, row, 0, {
-    virt_text = { { style.v, style.border_hl } },
-    virt_text_pos = "overlay",
-    virt_text_win_col = right_col,
-    virt_text_repeat_linebreak = true,
-    priority = 11,
-  })
+  -- Right border only when the style has a vertical rail.
+  if side_w > 0 then
+    local right_col = math.max(0, avail - side_w)
+    pcall(vim.api.nvim_buf_set_extmark, buf, ns, row, 0, {
+      virt_text = { { style.v, style.border_hl } },
+      virt_text_pos = "overlay",
+      virt_text_win_col = right_col,
+      virt_text_repeat_linebreak = true,
+      priority = 11,
+    })
+  end
   if is_first then
     pcall(vim.api.nvim_buf_set_extmark, buf, ns, row, 0, {
       virt_lines = { top_rule(style, inner, fold_hint) },
@@ -426,6 +440,10 @@ end
 local function fold_hint_for(b)
   if not b or not b.style then
     return nil
+  end
+  if b.edit_review then
+    -- Path is in the top-rule label; hint is the review key on the frame.
+    return "<C-r> full diff"
   end
   if b.style.bar_hl == "PiToolBar" then
     -- Default is expanded; nil counts as expanded
@@ -618,6 +636,36 @@ local function open_box(buf, style)
   return { buf = buf, ns = new_ns(), start0 = start0, end0 = start0, style = style }
 end
 
+--- Coalesce stream paint_box calls. Re-painting every text_delta clears virt_lines
+--- and makes the float shake; ~1 paint / frame is enough while growing.
+local paint_timer ---@type uv.uv_timer_t|nil
+local paint_pending ---@type table|nil
+
+local function flush_paint_box()
+  if paint_timer and not paint_timer:is_closing() then
+    paint_timer:stop()
+    paint_timer:close()
+  end
+  paint_timer = nil
+  local b = paint_pending
+  paint_pending = nil
+  if b and b.buf and vim.api.nvim_buf_is_valid(b.buf) and b.end0 > b.start0 then
+    paint_box(b)
+  end
+end
+
+local function schedule_paint_box(b)
+  paint_pending = b
+  if paint_timer and not paint_timer:is_closing() then
+    paint_timer:stop()
+    paint_timer:close()
+  end
+  paint_timer = vim.uv.new_timer()
+  paint_timer:start(32, 0, vim.schedule_wrap(function()
+    flush_paint_box()
+  end))
+end
+
 --- Extend a streaming box to the current end of the buffer
 local function grow_box(b)
   if not b or not vim.api.nvim_buf_is_valid(b.buf) then
@@ -628,14 +676,34 @@ local function grow_box(b)
   if end0 <= b.start0 then
     return
   end
-  if b.end0 <= b.start0 then
+  local first_paint = b.end0 <= b.start0
+  if first_paint then
     push_bubble(b.buf, b)
   end
   b.end0 = end0
-  paint_box(b)
+  if first_paint then
+    -- First chrome (top+bottom virt_lines) must land immediately; deferred
+    -- paint leaves a 1-frame hole and the follow dip is visible.
+    flush_paint_box()
+    paint_box(b)
+    M.follow(b.buf, true)
+  else
+    schedule_paint_box(b)
+  end
 end
 
---- Include 1-based line range [first1, last1] in the current tool bubble
+--- Find tool-styled bubble starting at 0-based `start0` (for in-place rewrites).
+local function find_tool_box_at(buf, start0)
+  for _, b in ipairs(bubbles[buf] or {}) do
+    if b.style and b.style.bar_hl == "PiToolBar" and b.start0 == start0 then
+      return b
+    end
+  end
+  return nil
+end
+
+--- Include 1-based line range [first1, last1] in the current tool bubble.
+--- Never commit a second box on the same start0 — that stacks ▌│ chrome.
 local function note_tool_lines(buf, first1, last1)
   if not first1 or first1 < 1 then
     return
@@ -644,22 +712,60 @@ local function note_tool_lines(buf, first1, last1)
   close_thinking_box()
   close_assistant_box()
   local s0, e0 = first1 - 1, last1
+
+  -- Prefer the active tool_box when it owns this start.
+  if tool_box and tool_box.buf == buf and tool_box.box and tool_box.box.start0 == s0 then
+    tool_box.box.end0 = e0
+    paint_box(tool_box.box)
+    return
+  end
   if tool_box and tool_box.buf == buf then
     local b = tool_box.box
-    if s0 >= b.start0 and e0 <= b.end0 then
-      -- same block rewritten (collapse ×N)
+    if b and s0 >= b.start0 and e0 <= b.end0 then
       paint_box(b)
       return
     end
-    if b.end0 == s0 then
-      -- contiguous next tool block
+    if b and b.end0 == s0 then
       b.end0 = e0
       paint_box(b)
       return
     end
   end
+
+  -- Reuse registry entry at this start (×N merge clears tool_box after remove_live).
+  local existing = find_tool_box_at(buf, s0)
+  if existing then
+    existing.end0 = e0
+    tool_box = { buf = buf, box = existing }
+    paint_box(existing)
+    return
+  end
+
   close_tool_batch()
   tool_box = { buf = buf, box = commit_box(buf, STYLES.tool, s0, e0) }
+end
+
+--- Drop tool bubbles that no longer cover any lines or duplicate another tool's start.
+local function prune_tool_boxes(buf)
+  local list = bubbles[buf]
+  if not list then
+    return
+  end
+  local seen = {}
+  for i = #list, 1, -1 do
+    local b = list[i]
+    if b.style and b.style.bar_hl == "PiToolBar" then
+      if b.end0 <= b.start0 or seen[b.start0] then
+        pcall(vim.api.nvim_buf_clear_namespace, buf, b.ns, 0, -1)
+        table.remove(list, i)
+        if tool_box and tool_box.box == b then
+          tool_box = nil
+        end
+      else
+        seen[b.start0] = true
+      end
+    end
+  end
 end
 
 --- Redraw every remembered box (VimResized / WinResized / layout maximize).
@@ -1006,20 +1112,29 @@ function M.follow(buf, force, win)
       local topline = math.max(1, target - height + 1 + pad)
       pcall(function()
         vim.wo[w].scrolloff = 0
+        -- Slot/float reconfigure can restore smoothscroll; keep it off so
+        -- animated topline never fights the next winrestview.
+        vim.wo[w].smoothscroll = false
       end)
-      -- Do NOT steal focus from input — only mutate the chat win view
-      pcall(vim.api.nvim_win_set_cursor, w, { cursor_line, 0 })
-      pcall(vim.api.nvim_win_call, w, function()
-        vim.fn.winrestview({
-          lnum = cursor_line,
-          col = 0,
-          topline = topline,
-          leftcol = 0,
-          curswant = 0,
-        })
-      end)
-      -- Force GUI/TUI to paint the non-current float
-      pcall(vim.api.nvim__redraw, { win = w, cursor = true, valid = true, flush = true })
+
+      local cur_top = vim.fn.line("w0", w)
+      local cur_lnum = vim.api.nvim_win_get_cursor(w)[1]
+      -- Already pinned — skip set_cursor/winrestview/redraw (stream noise).
+      if cur_top ~= topline or cur_lnum ~= cursor_line then
+        -- Do NOT steal focus from input — only mutate the chat win view
+        pcall(vim.api.nvim_win_set_cursor, w, { cursor_line, 0 })
+        pcall(vim.api.nvim_win_call, w, function()
+          vim.fn.winrestview({
+            lnum = cursor_line,
+            col = 0,
+            topline = topline,
+            leftcol = 0,
+            curswant = 0,
+          })
+        end)
+        -- Force GUI/TUI to paint the non-current float (only when view moved)
+        pcall(vim.api.nvim__redraw, { win = w, cursor = true, valid = true, flush = true })
+      end
     end
   end
 end
@@ -1051,7 +1166,7 @@ local function schedule_follow(buf)
     pcall(function()
       win = require("pi.ui").chat_win()
     end)
-    M.follow(buf, true, win)
+    M.follow(buf, false, win)
   end))
 end
 
@@ -1315,11 +1430,16 @@ local function append_tool_lines(buf, lines)
   -- M.append clears last_tool (non-tool content breaks ×N); keep it across tool rows.
   local saved = last_tool
   local first = last_content_line(buf) + 1
+  -- One follow after the whole block — per-line schedule_follow makes topline thrash.
+  local prev_suspend = suspend_follow
+  suspend_follow = true
   for _, l in ipairs(lines) do
     M.append(buf, l)
   end
+  suspend_follow = prev_suspend
   last_tool = saved
   note_tool_lines(buf, first, last_content_line(buf))
+  schedule_follow(buf)
   return first
 end
 
@@ -1387,75 +1507,270 @@ local function paint_tool_start(buf, id, name, args)
   close_assistant_box()
   -- New box each run — do not extend the previous finished tool bubble.
   close_tool_batch()
-  local full = tool_block(buf, name, args, nil, 1, nil)
-  local first = append_tool_lines(buf, full)
-  attach_tool_payload(buf, full, true, false)
   local meta = pending[id] or {}
   meta.name = name
   meta.args = args
+  -- Keep the earliest snapshot from tool_execution_start (do not re-read after
+  -- bash may already have written the file).
+  if not meta.snapshots then
+    meta.snapshots = Wpaths.snapshot_writes(name, args)
+  end
+  local full = tool_block(buf, name, args, nil, 1, nil)
+  local first = append_tool_lines(buf, full)
+  attach_tool_payload(buf, full, true, false)
   meta.start_line = first
   meta.n = #full
   meta.live = true
   pending[id] = meta
-  schedule_follow(buf)
+  -- append_tool_lines already schedule_follow once
+end
+
+--- Shift bubble ranges after a in-place tool rewrite changed line count by `delta`.
+local function shift_after_tool_rewrite(buf, old_end0, start0, new_n, delta)
+  if delta == 0 then
+    return
+  end
+  for _, b in ipairs(bubbles[buf] or {}) do
+    if b.start0 >= old_end0 then
+      b.start0 = b.start0 + delta
+      b.end0 = b.end0 + delta
+    elseif b.start0 == start0 then
+      b.end0 = b.start0 + new_n
+    end
+  end
+  if think_box and think_box.buf == buf and think_box.box and think_box.box.start0 >= old_end0 then
+    think_box.box.start0 = think_box.box.start0 + delta
+    think_box.box.end0 = think_box.box.end0 + delta
+  end
+  if asst_box and asst_box.buf == buf and asst_box.box and asst_box.box.start0 >= old_end0 then
+    asst_box.box.start0 = asst_box.box.start0 + delta
+    asst_box.box.end0 = asst_box.box.end0 + delta
+  end
+  if last_tool and last_tool.start_line then
+    local last_start0 = last_tool.start_line - 1
+    if last_start0 > start0 then
+      last_tool.start_line = last_tool.start_line + delta
+    end
+  end
+end
+
+--- Match a host-tool path to the latest session.touched snapshot.
+local function touched_for_args(args)
+  if type(args) ~= "table" or not args.path then
+    return nil
+  end
+  local path = tostring(args.path)
+  local abs = vim.fn.fnamemodify(path, ":p")
+  local rel = vim.fn.fnamemodify(path, ":.")
+  local ok_s, session = pcall(require, "pi.session")
+  if not ok_s then
+    return nil
+  end
+  local list = session.touched() or {}
+  for i = #list, 1, -1 do
+    local t = list[i]
+    if t and (t.path == abs or t.rel == rel or t.rel == path or t.path == path) then
+      return t
+    end
+  end
+  return nil
+end
+
+--- Prefer host touched snapshot; fall back to disk snapshots from tool_start.
+--- Returns full, rel (rel is nil when not an edit-diff block).
+local function maybe_edit_diff_full(full, name, args, ok, has_err, meta)
+  if not ok or has_err then
+    return full, nil
+  end
+
+  -- Host buffer edit: before/after from session.touched + live buffer.
+  if is_buffer_edit(name, args) then
+    local t = touched_for_args(args)
+    if t and t.before and t.buf and vim.api.nvim_buf_is_valid(t.buf) then
+      local after = vim.api.nvim_buf_get_lines(t.buf, 0, -1, false)
+      local rel = t.rel or args.path
+      return edit_diff_lines(rel, t.before, after), rel
+    end
+  end
+
+  -- Disk writes (bash >, write tool, …): compare tool_start snapshot → now.
+  local changed = Wpaths.first_changed(meta and meta.snapshots)
+  if not changed then
+    return full, nil
+  end
+  -- Register for <C-r> preview (same queue as host edits).
+  pcall(function()
+    local host = require("pi.host_tools")
+    local b = host.ensure_buf(changed.path)
+    if b then
+      -- Reload from disk so preview matches what bash wrote.
+      if vim.fn.filereadable(changed.path) == 1 then
+        vim.api.nvim_buf_set_lines(b, 0, -1, false, changed.after)
+      end
+      local row = 1
+      for i = 1, math.max(#changed.before, #changed.after) do
+        if (changed.before[i] or "") ~= (changed.after[i] or "") then
+          row = i
+          break
+        end
+      end
+      require("pi.session").record_edit({
+        path = changed.path,
+        rel = changed.rel,
+        before = changed.before,
+        buf = b,
+        changed_row = row,
+      })
+    end
+  end)
+  return edit_diff_lines(changed.rel, changed.before, changed.after), changed.rel
+end
+
+--- Put filename in the top-rule label and mark box for <C-r> hint.
+local function apply_edit_chrome(buf, rel)
+  if not rel or rel == "" then
+    return
+  end
+  local b = tool_box and tool_box.buf == buf and tool_box.box or nil
+  if not b then
+    local list = bubbles[buf] or {}
+    for i = #list, 1, -1 do
+      local cand = list[i]
+      if cand.style and cand.style.bar_hl == "PiToolBar" then
+        b = cand
+        break
+      end
+    end
+  end
+  if not b then
+    return
+  end
+  b.edit_review = true
+  local s = vim.tbl_extend("force", {}, b.style or STYLES.tool)
+  -- Short path in the frame (basename if long)
+  local label = tostring(rel)
+  if vim.fn.strdisplaywidth(label) > 28 then
+    label = vim.fn.fnamemodify(label, ":t")
+  end
+  s.label = label
+  b.style = s
+  paint_box(b)
+end
+
+--- Collapse finished successful tool / thinking boxes. Deferred to agent_end so
+--- a turn does not expand→fold mid-stream (thinking_end used to yank topline).
+local function auto_collapse_tools(buf)
+  if not auto_fold_enabled() or not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  local list = {}
+  for _, b in ipairs(bubbles[buf] or {}) do
+    local tool = b.tool_full and b.style and b.style.bar_hl == "PiToolBar"
+    local think = b.fold_full and b.fold_kind == "thinking"
+    if tool or think then
+      list[#list + 1] = b
+    end
+  end
+  -- Bottom-up so earlier boxes keep valid start0 while later ones shrink.
+  table.sort(list, function(a, c)
+    return a.start0 > c.start0
+  end)
+  for _, b in ipairs(list) do
+    maybe_auto_collapse(buf, b)
+  end
+  prune_tool_boxes(buf)
 end
 
 --- Render one finished tool call into the chat, folding identical consecutive
 --- calls into the previous block (×N) so a tool loop does not spam the buffer.
---- Live start placeholder (if any) is replaced; successful calls auto-collapse.
+--- Live start placeholder (if any) is replaced in place (no delete+reappend jitter).
+--- Successful tools stay expanded until agent_end (see auto_collapse_tools).
 local function upsert_tool_end(buf, name, args, ok, err, meta)
   meta = meta or {}
   local has_err = err and err ~= ""
   local full = tool_block(buf, name, args, ok, 1, err)
+  local edit_rel
+  full, edit_rel = maybe_edit_diff_full(full, name, args, ok, has_err, meta)
   local key = table.concat(full, "\n")
-  local want_expanded = has_err or not auto_fold_enabled()
+  -- Keep expanded through the turn; only errors must stay open forever.
+  -- auto_fold collapses successes once on agent_end.
+  local want_expanded = true
 
-  -- Drop the in-flight placeholder before merging / painting the final block.
-  if meta.live and meta.start_line and meta.n then
-    remove_live_tool_lines(buf, meta.start_line, meta.n)
-  end
+  -- In-place: rewrite the live placeholder → final display (one height change).
+  if meta.live and meta.start_line and meta.n and meta.n > 0 then
+    local start_line = meta.start_line
+    local old_n = meta.n
+    local start0 = start_line - 1
+    local old_end0 = start0 + old_n
 
-  -- Collapse identical consecutive calls onto the first block (×N). The key is
-  -- the rendered block text, so a wrapping/capping change breaks the chain the
-  -- same way a different call would — no stale ×N left on edited lines.
-  if
-    ok
-    and last_tool
-    and last_tool.ok
-    and last_tool.key == key
-    and last_tool.start_line
-    and last_tool.start_line + last_tool.n - 1 <= line_count(buf)
-  then
-    last_tool.count = last_tool.count + 1
-    full = tool_block(buf, name, args, ok, last_tool.count, err)
-    local expanded = want_expanded
-    local display = collapse_tool_lines(full, expanded, false)
+    -- ×N onto previous finished block: drop live rows, bump previous.
+    if
+      ok
+      and last_tool
+      and last_tool.ok
+      and last_tool.key == key
+      and last_tool.start_line
+      and last_tool.start_line + last_tool.n - 1 <= line_count(buf)
+      and last_tool.start_line ~= start_line
+    then
+      remove_live_tool_lines(buf, start_line, old_n)
+      last_tool.count = last_tool.count + 1
+      full = tool_block(buf, name, args, ok, last_tool.count, err)
+      full, edit_rel = maybe_edit_diff_full(full, name, args, ok, has_err, meta)
+      local expanded = want_expanded
+      local display = collapse_tool_lines(full, expanded, false)
+      local prev_n = last_tool.n
+      with_write(buf, function()
+        vim.api.nvim_buf_set_lines(buf, last_tool.start_line - 1, last_tool.start_line - 1 + prev_n, false, display)
+      end)
+      local new_n = #display
+      local delta = new_n - prev_n
+      last_tool.n = new_n
+      last_tool.full = full
+      last_tool.expanded = expanded
+      -- Rebind tool_box to the kept bubble before note_tool_lines (remove_live
+      -- cleared it; a naive commit_box would stack a second chrome on the same rows).
+      local kept = find_tool_box_at(buf, last_tool.start_line - 1)
+      if kept then
+        tool_box = { buf = buf, box = kept }
+      end
+      note_tool_lines(buf, last_tool.start_line, last_tool.start_line + new_n - 1)
+      attach_tool_payload(buf, full, expanded, false)
+      apply_edit_chrome(buf, edit_rel)
+      shift_after_tool_rewrite(buf, last_tool.start_line - 1 + prev_n, last_tool.start_line - 1, new_n, delta)
+      prune_tool_boxes(buf)
+      schedule_follow(buf)
+      return
+    end
+
+    local display = collapse_tool_lines(full, want_expanded, has_err)
     with_write(buf, function()
-      vim.api.nvim_buf_set_lines(buf, last_tool.start_line - 1, last_tool.start_line - 1 + last_tool.n, false, display)
+      vim.api.nvim_buf_set_lines(buf, start0, old_end0, false, display)
     end)
     local new_n = #display
-    local old_n = last_tool.n
     local delta = new_n - old_n
-    last_tool.n = new_n
-    last_tool.full = full
-    last_tool.expanded = expanded
-    note_tool_lines(buf, last_tool.start_line, last_tool.start_line + new_n - 1)
-    attach_tool_payload(buf, full, expanded, false)
-    if delta ~= 0 then
-      local old_end = last_tool.start_line - 1 + old_n
-      for _, b in ipairs(bubbles[buf] or {}) do
-        if b.start0 >= old_end then
-          b.start0 = b.start0 + delta
-          b.end0 = b.end0 + delta
-        elseif b.start0 == last_tool.start_line - 1 then
-          b.end0 = b.start0 + new_n
-        end
-      end
+    shift_after_tool_rewrite(buf, old_end0, start0, new_n, delta)
+    -- Keep / refresh the box covering this range
+    note_tool_lines(buf, start_line, start_line + new_n - 1)
+    last_tool = {
+      key = key,
+      ok = ok,
+      count = 1,
+      start_line = start_line,
+      n = new_n,
+      full = full,
+      expanded = want_expanded,
+    }
+    attach_tool_payload(buf, full, want_expanded, has_err)
+    apply_edit_chrome(buf, edit_rel)
+    if has_err then
+      mark_error_lines(buf, start_line, new_n)
     end
     schedule_follow(buf)
     return
   end
 
+  -- No live placeholder (missed start): append final display.
   local display = collapse_tool_lines(full, want_expanded, has_err)
   local first = append_tool_lines(buf, display)
   last_tool = {
@@ -1468,6 +1783,7 @@ local function upsert_tool_end(buf, name, args, ok, err, meta)
     expanded = want_expanded,
   }
   attach_tool_payload(buf, full, want_expanded, has_err)
+  apply_edit_chrome(buf, edit_rel)
   if has_err then
     mark_error_lines(buf, first, #display)
   end
@@ -1539,14 +1855,19 @@ local function apply_box_expand(buf, target, expanded)
   if target.tool_full then
     full = target.tool_full
     display = collapse_tool_lines(full, expanded, target.tool_has_err)
+    -- Short tools: body unchanged when folded, but chrome hint still flips.
     if not expanded and not lines_differ(full, display) then
-      return false
+      target.tool_expanded = false
+      paint_box(target)
+      return true
     end
   elseif target.fold_full and target.fold_kind == "thinking" then
     full = target.fold_full
     display = collapse_thinking_lines(full, expanded)
     if not expanded and not lines_differ(full, display) then
-      return false
+      target.fold_expanded = false
+      paint_box(target)
+      return true
     end
   else
     return false
@@ -1903,7 +2224,13 @@ function M.on_event(buf, ev)
     local id = ev.toolCallId or ev.id or tostring(vim.uv.hrtime())
     local name = ev.toolName
     local args = ev.args or ev.input or ev.toolArguments
-    pending[id] = { name = name, args = args }
+    -- Snapshot immediately — before paint — so bash redirects are captured
+    -- as early as the start event allows.
+    pending[id] = {
+      name = name,
+      args = args,
+      snapshots = Wpaths.snapshot_writes(name, args),
+    }
     if name then
       paint_tool_start(buf, id, name, args)
     end
@@ -1980,6 +2307,9 @@ function M.on_event(buf, ev)
         end
       end
     end
+    flush_paint_box()
+    -- Fold successful tools/thinking once per turn (not mid-stream).
+    auto_collapse_tools(buf)
     M.note_pending_review(buf)
     schedule_follow(buf)
     return
@@ -2006,8 +2336,10 @@ function M.on_event(buf, ev)
       in_thinking_body = false
       if think_box and think_box.buf == buf and think_box.box then
         grow_box(think_box.box)
+        flush_paint_box()
         attach_thinking_fold(buf, think_box.box)
-        maybe_auto_collapse(buf, think_box.box)
+        -- Keep expanded through the turn; auto_collapse_tools folds on agent_end
+        -- (folding here yanked topline by ~height of the thinking body).
       end
       close_thinking_box()
       schedule_follow(buf)

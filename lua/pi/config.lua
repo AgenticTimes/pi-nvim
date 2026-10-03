@@ -60,8 +60,8 @@ M.opts = {
   busy_submit = "steer", -- "steer" | "followUp" when agent is streaming
   --- stream thinking as gray text (no role labels; OpenCode-style)
   show_thinking = true,
-  --- After thinking_end / successful tool_execution_end, auto-collapse the box
-  --- (expanded while streaming/running). Errors stay open. ftk/ftt still toggle.
+  --- Thinking + successful tools stay open until agent_end, then fold together
+  --- (avoids mid-turn expand/collapse jitter). Errors stay open. ftk/ftt still toggle.
   auto_fold = true,
   --- "auto" = builtins + nvim host tools; "chat" = --no-tools
   mode = "auto",

@@ -26,7 +26,7 @@ function M.pick(on_select)
     return
   end
   require("pi.ui").with_picker(function(done)
-    vim.ui.select(skills, {
+    local opts = {
       prompt = "pi #skills",
       format_item = function(c)
         local name = tostring(c.name or ""):gsub("^skill:", "")
@@ -36,7 +36,16 @@ function M.pick(on_select)
         end
         return "#" .. name
       end,
-    }, function(choice)
+    }
+    local ok_tel, themes = pcall(require, "telescope.themes")
+    if ok_tel then
+      opts.telescope = themes.get_dropdown({
+        zindex = 200,
+        winblend = 0,
+        layout_config = { width = 0.72, height = 0.35 },
+      })
+    end
+    vim.ui.select(skills, opts, function(choice)
       done()
       if choice and on_select then
         on_select(choice)

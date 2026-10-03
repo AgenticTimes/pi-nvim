@@ -87,6 +87,7 @@ function M.setup(b, on_close)
     local cur = table.concat(lines, "\n")
     -- empty or only whitespace → open slash picker; else insert /
     if cur:match("^%s*$") then
+      vim.cmd("stopinsert")
       require("pi.slash").insert_into(b)
     else
       vim.api.nvim_feedkeys(slash_key, "n", false)
@@ -94,6 +95,7 @@ function M.setup(b, on_close)
   end, opts)
   if k.mention then
     vim.keymap.set("i", k.mention, function()
+      vim.cmd("stopinsert")
       context.pick_file(function(path)
         local lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
         local cur = table.concat(lines, "\n")
@@ -107,6 +109,7 @@ function M.setup(b, on_close)
     local lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
     local cur = table.concat(lines, "\n")
     if cur:match("^%s*$") then
+      vim.cmd("stopinsert")
       require("pi.skills").insert_into(b)
     else
       vim.api.nvim_feedkeys(skill_key, "n", false)

@@ -202,8 +202,11 @@ local function configure_chat_win(win)
   pcall(function()
     vim.wo[win].winblend = blend
   end)
+  -- smoothscroll animates topline changes; stream follow calls winrestview
+  -- many times per second and the animation fights those jumps (content
+  -- briefly dips down, then catches up scrolling up). Keep it off for chat.
   pcall(function()
-    vim.wo[win].smoothscroll = true
+    vim.wo[win].smoothscroll = false
   end)
 end
 
@@ -966,9 +969,8 @@ end
 function M.on_event(ev)
   local buf = M.chat_buf()
   require("pi.render").on_event(buf, ev)
-  if wins.chat and vim.api.nvim_win_is_valid(wins.chat) then
-    require("pi.render").follow(buf, true, wins.chat)
-  end
+  -- follow is coalesced inside render (schedule_follow). Do not force
+  -- winrestview on every tool/agent event — that fought the 30ms timer.
   if ev and ev.type == "tool_execution_end" then
     local name = ev.toolName
     if name == "todo" and todos_open then

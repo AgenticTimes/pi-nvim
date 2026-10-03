@@ -86,12 +86,16 @@ render.on_event(tb, {
   isError = true,
   result = { content = { { type = "text", text = "command not found" } } },
 })
+-- successful tools stay open until agent_end, then auto-fold
+render.on_event(tb, { type = "agent_end" })
 local tjoin = table.concat(vim.api.nvim_buf_get_lines(tb, 0, -1, false), "\n")
 -- successful tools auto-fold; headers stay, arg bodies hide until ftt
 h.assert_truthy(tjoin:find("⚙ read_buffer", 1, true), "read tool header: " .. tjoin)
 h.assert_truthy(tjoin:find("⚙ bash", 1, true), "bash tool header")
 h.assert_truthy(tjoin:find("ftt to expand", 1, true), "auto-folded success tools")
-h.assert_false(tjoin:find("  path: demo/sample.lua", 1, true), "read args hidden while folded")
+-- first arg line kept as preview; later args (path) stay hidden for read_buffer
+h.assert_truthy(tjoin:find("limit:", 1, true) or tjoin:find("path:", 1, true), "preview arg kept")
+h.assert_false(tjoin:find("  path: demo/sample.lua", 1, true) and tjoin:find("  offset:", 1, true), "not fully expanded")
 -- errors stay expanded
 h.assert_truthy(tjoin:find("  ! command not found", 1, true), "tool error text")
 h.assert_truthy(tjoin:find("✗", 1, true), "failure mark")
@@ -129,8 +133,9 @@ render.on_event(lb, {
   toolName = "bash",
   isError = false,
 })
+render.on_event(lb, { type = "agent_end" })
 local ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
-h.assert_truthy(ljoin:find("ftt to expand", 1, true), "auto-folded after tool end: " .. ljoin)
+h.assert_truthy(ljoin:find("ftt to expand", 1, true), "auto-folded after agent_end: " .. ljoin)
 h.assert_false(ljoin:find("line7", 1, true), "tail hidden while auto-folded")
 local lwin = vim.api.nvim_open_win(lb, true, {
   relative = "editor",
@@ -312,14 +317,28 @@ render.on_event(b, {
   type = "message_update",
   assistantMessageEvent = { type = "text_delta", delta = "final answer" },
 })
+-- thinking stays open through the answer; fold once on agent_end
 lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
 joined = table.concat(lines, "\n")
 h.assert_false(joined:find("### thinking", 1, true), "no thinking header")
-h.assert_truthy(joined:find("step one", 1, true), "thinking line1 kept as fold preview")
-h.assert_false(joined:find("step two", 1, true), "thinking body auto-folded")
-h.assert_truthy(joined:find("ftk to expand", 1, true), "thinking fold hint")
+h.assert_truthy(joined:find("step two", 1, true), "thinking still open mid-turn")
 h.assert_false(joined:find("### assistant", 1, true), "no assistant header")
 h.assert_truthy(joined:find("final answer", 1, true), "answer text")
+render.on_event(b, { type = "agent_end" })
+lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
+joined = table.concat(lines, "\n")
+h.assert_truthy(joined:find("step one", 1, true), "thinking line1 kept as fold preview")
+h.assert_false(joined:find("step two", 1, true), "thinking body auto-folded on agent_end")
+local think_hint = ""
+for _, m in ipairs(h.box_marks(b)) do
+  local d = m[4] or {}
+  if d.virt_lines_above and d.virt_lines then
+    for _, chunk in ipairs(d.virt_lines[1] or {}) do
+      think_hint = think_hint .. (chunk[1] or "")
+    end
+  end
+end
+h.assert_truthy(think_hint:find("ftk to expand", 1, true), "thinking fold hint on chrome")
 local answer_line
 for _, l in ipairs(lines) do
   if l:find("final answer", 1, true) then

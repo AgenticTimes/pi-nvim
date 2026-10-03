@@ -12,8 +12,16 @@ function M.fetch(force)
   if not force and #cache.cmds > 0 and (os.time() - cache.fetched_at) < 60 then
     return cache.cmds
   end
-  require("pi.runtime").ensure_started()
-  local client = require("pi.client")
+  local runtime = require("pi.runtime")
+  runtime.ensure_started()
+  pcall(function()
+    require("pi.slots").ensure_primary_job()
+  end)
+  local client = runtime.rpc_client()
+  if not client.is_running() then
+    vim.notify("pi: get_commands failed: RPC not running", vim.log.levels.WARN)
+    return cache.cmds
+  end
   local resp, err = client.request({ type = "get_commands" }, require("pi.config").opts.rpc_timeout * 1000)
   if not resp or not resp.success then
     vim.notify("pi: get_commands failed: " .. tostring(err or (resp and resp.error)), vim.log.levels.WARN)
