@@ -49,11 +49,18 @@ local stream_at_bol = false
 local follow_scheduled = false
 --- Cleared only by gg; content updates always force-follow while true
 local stick_bottom = true
+--- Keep last content this many rows above the window floor while following.
+--- Filling the last row makes box virt_lines / stream appends jitter the float.
+local BOTTOM_PAD = 2
 --- Ignore WinScrolled until this hrtime
 local suppress_until = 0
 local scroll_autocmd ---@type integer|nil
 --- buf → history state from sessions.open_history (nil once fully loaded)
 local history_by_buf = {}
+--- buf → unwrapped {role,content} for maximize/resize reflow (hard-wrap source)
+local transcript_by_buf = {}
+--- When true, append_user / agent_end must not mutate transcript (hydrate paints).
+local transcript_skip_record = false
 local OLDER_MARK = "↑ 更早的对话 · 滚到顶或 gg 加载"
 --- Text-level decoration (thinking gray text, error red, legacy you bar)
 local role_ns = vim.api.nvim_create_namespace("pi_role")
@@ -63,7 +70,8 @@ local in_thinking_body = false
 --- One box shape+palette per role so user / tool / thinking are told apart at a glance
 local STYLES = {
   user = {
-    label = "user",
+    -- Per-box via make_user_style: "you · #N"
+    label = "you",
     label_hl = "PiYou",
     tl = "╭",
     tr = "╮",
@@ -105,7 +113,7 @@ local STYLES = {
     body_hl = "PiThinkBubble",
   },
   -- Final answer: same ▌│ chrome widths as toolcall so body text shares columns.
-  -- Label is set per-box to the turn number ("#1", "#2", …) via make_assistant_style.
+  -- Label is set per-box via make_assistant_style: "model · #N".
   assistant = {
     label = "",
     label_hl = "PiAssistant",
@@ -130,6 +138,8 @@ local think_box = nil
 local asst_box = nil
 local box_seq = 0
 local bubble_resize_autocmd ---@type integer|nil
+--- Forward decl: assigned after apply_box_expand (used by append_thinking / tool end).
+local maybe_auto_collapse
 
 --- 每个 box 独占一个 extmark namespace，重绘 = 清空整个 namespace 再画。
 --- 按行范围清是不可靠的：virt_lines + nvim_buf_set_lines 会平移被改写行的
@@ -170,12 +180,31 @@ end
 --- measure, and the chat window can be much narrower than the screen (todo
 --- sidebar), so remember the real width instead of guessing from `columns`.
 local last_avail = nil
+--- Optional win override for hydrate/reflow right after float set_config
+--- (win_findbuf can briefly miss the resized float).
+local pinned_avail_win ---@type integer|nil
+
+--- Run `fn` while bubble width is measured from `win` (maximize / restore).
+---@param win integer|nil
+---@param fn fun()
+function M.with_avail_win(win, fn)
+  local prev = pinned_avail_win
+  pinned_avail_win = win
+  local ok, err = pcall(fn)
+  pinned_avail_win = prev
+  if not ok then
+    error(err)
+  end
+end
 
 local function bubble_avail(buf)
-  local wins = vim.fn.win_findbuf(buf)
+  local win = pinned_avail_win
+  if not (win and vim.api.nvim_win_is_valid(win)) then
+    local wins = vim.fn.win_findbuf(buf)
+    win = wins[1]
+  end
   local avail
-  if wins[1] then
-    local win = wins[1]
+  if win and vim.api.nvim_win_is_valid(win) then
     local info = vim.fn.getwininfo(win)[1]
     local width = (info and info.width) or vim.api.nvim_win_get_width(win)
     local off = (info and info.textoff) or 0
@@ -450,6 +479,39 @@ local function is_assistant_style(style)
   return style and style.bar_hl == "PiAsstBar"
 end
 
+local function is_user_style(style)
+  return style and style.bar_hl == "PiYouBar"
+end
+
+--- Short model id for bubble labels (narrow-pane friendly).
+local function short_model_name()
+  local id
+  pcall(function()
+    local m = require("pi.session").get().model
+    if type(m) == "table" then
+      id = m.id or m.name
+    elseif type(m) == "string" then
+      id = m
+    end
+  end)
+  if type(id) ~= "string" or id == "" then
+    return "pi"
+  end
+  id = id:match("([^/]+)$") or id
+  if vim.fn.strdisplaywidth(id) > 16 then
+    id = vim.fn.strcharpart(id, 0, 14) .. "…"
+  end
+  return id
+end
+
+local function turn_label(tag, n)
+  return tostring(tag) .. " · #" .. tostring(n)
+end
+
+local function auto_fold_enabled()
+  return require("pi.config").opts.auto_fold ~= false
+end
+
 --- How many final-answer boxes already exist in this buffer (chronological).
 local function count_assistant_boxes(buf)
   local n = 0
@@ -461,14 +523,32 @@ local function count_assistant_boxes(buf)
   return n
 end
 
---- 为 assistant 样式做一份副本，左上角写轮次序号（与 "toolcall" 同一槽位）。
+local function count_user_boxes(buf)
+  local n = 0
+  for _, b in ipairs(bubbles[buf] or {}) do
+    if is_user_style(b.style) then
+      n = n + 1
+    end
+  end
+  return n
+end
+
+--- Assistant style copy with "model · #N" in the top-left label slot.
 local function make_assistant_style(buf)
   local s = vim.tbl_extend("force", {}, STYLES.assistant)
-  s.label = "#" .. tostring(count_assistant_boxes(buf) + 1)
+  s.model_tag = short_model_name()
+  s.label = turn_label(s.model_tag, count_assistant_boxes(buf) + 1)
   return s
 end
 
---- After prepending history, renumber answer boxes #1..#N by buffer order.
+--- User style copy with "you · #N".
+local function make_user_style(buf)
+  local s = vim.tbl_extend("force", {}, STYLES.user)
+  s.label = turn_label("you", count_user_boxes(buf) + 1)
+  return s
+end
+
+--- After prepending history, renumber answer/user boxes by buffer order.
 local function renumber_assistant_boxes(buf)
   local list = {}
   for _, b in ipairs(bubbles[buf] or {}) do
@@ -481,7 +561,26 @@ local function renumber_assistant_boxes(buf)
   end)
   for i, b in ipairs(list) do
     local s = vim.tbl_extend("force", {}, STYLES.assistant)
-    s.label = "#" .. tostring(i)
+    s.model_tag = (b.style and b.style.model_tag) or short_model_name()
+    s.label = turn_label(s.model_tag, i)
+    b.style = s
+    paint_box(b)
+  end
+end
+
+local function renumber_user_boxes(buf)
+  local list = {}
+  for _, b in ipairs(bubbles[buf] or {}) do
+    if is_user_style(b.style) then
+      list[#list + 1] = b
+    end
+  end
+  table.sort(list, function(a, c)
+    return a.start0 < c.start0
+  end)
+  for i, b in ipairs(list) do
+    local s = vim.tbl_extend("force", {}, STYLES.user)
+    s.label = turn_label("you", i)
     b.style = s
     paint_box(b)
   end
@@ -515,7 +614,8 @@ end
 --- Box that is still streaming: not registered until it has at least one line
 local function open_box(buf, style)
   local n = vim.api.nvim_buf_line_count(buf)
-  return { buf = buf, ns = new_ns(), start0 = n, end0 = n, style = style }
+  local start0 = (n <= BOTTOM_PAD) and 0 or (n - BOTTOM_PAD)
+  return { buf = buf, ns = new_ns(), start0 = start0, end0 = start0, style = style }
 end
 
 --- Extend a streaming box to the current end of the buffer
@@ -524,13 +624,14 @@ local function grow_box(b)
     return
   end
   local n = vim.api.nvim_buf_line_count(b.buf)
-  if n <= b.start0 then
+  local end0 = (n <= BOTTOM_PAD) and 0 or (n - BOTTOM_PAD)
+  if end0 <= b.start0 then
     return
   end
   if b.end0 <= b.start0 then
     push_bubble(b.buf, b)
   end
-  b.end0 = n
+  b.end0 = end0
   paint_box(b)
 end
 
@@ -561,11 +662,19 @@ local function note_tool_lines(buf, first1, last1)
   tool_box = { buf = buf, box = commit_box(buf, STYLES.tool, s0, e0) }
 end
 
---- Redraw every remembered box (VimResized / WinResized repaint).
+--- Redraw every remembered box (VimResized / WinResized / layout maximize).
 local function repaint_bubbles(buf)
   for _, b in ipairs(bubbles[buf] or {}) do
     paint_box(b)
   end
+end
+
+--- Public: re-paint box chrome for `buf` after the chat window changes size.
+function M.repaint(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  repaint_bubbles(buf)
 end
 
 --- Decorate one appended line with text-level marks (legacy role headers from
@@ -710,6 +819,75 @@ local function with_write(buf, fn)
   end
 end
 
+--- Bottom pad is always the last BOTTOM_PAD buffer lines (invariant). Do not
+--- scan for empties — intentional blank separators must stay in the content zone.
+local function content_end0(buf)
+  local n = vim.api.nvim_buf_line_count(buf)
+  if n <= BOTTOM_PAD then
+    return 0
+  end
+  return n - BOTTOM_PAD
+end
+
+--- 1-based last content line (line just before the pad zone).
+local function last_content_line(buf)
+  local ce = content_end0(buf)
+  if ce <= 0 then
+    return 1
+  end
+  return ce
+end
+
+--- Ensure the last BOTTOM_PAD lines exist and are empty.
+local function ensure_bottom_pad(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  local n = vim.api.nvim_buf_line_count(buf)
+  if n < BOTTOM_PAD then
+    with_write(buf, function()
+      local add = {}
+      for _ = 1, BOTTOM_PAD - n do
+        add[#add + 1] = ""
+      end
+      vim.api.nvim_buf_set_lines(buf, -1, -1, false, add)
+    end)
+    return
+  end
+  local tail = vim.api.nvim_buf_get_lines(buf, n - BOTTOM_PAD, n, false)
+  local dirty = false
+  for _, l in ipairs(tail) do
+    if l ~= "" then
+      dirty = true
+      break
+    end
+  end
+  if not dirty then
+    return
+  end
+  with_write(buf, function()
+    local pad = {}
+    for _ = 1, BOTTOM_PAD do
+      pad[#pad + 1] = ""
+    end
+    vim.api.nvim_buf_set_lines(buf, -1, -1, false, pad)
+  end)
+end
+
+--- Replace from content end through EOF with `lines` followed by BOTTOM_PAD blanks.
+local function write_before_pad(buf, lines)
+  local out = {}
+  for _, l in ipairs(lines) do
+    out[#out + 1] = l
+  end
+  for _ = 1, BOTTOM_PAD do
+    out[#out + 1] = ""
+  end
+  local insert0 = content_end0(buf)
+  vim.api.nvim_buf_set_lines(buf, insert0, -1, false, out)
+  return insert0
+end
+
 --- Clear all chat state for `buf` (boxes, decorations, streaming handles) and
 --- re-seed the buffer with the "# pi chat" header. Also drops the history
 --- cursor so a fresh session does not continue an old transcript.
@@ -728,6 +906,7 @@ function M.reset(buf)
   asst_box = nil
   if buf then
     history_by_buf[buf] = nil
+    transcript_by_buf[buf] = nil
   end
   if buf and vim.api.nvim_buf_is_valid(buf) then
     for _, b in ipairs(bubbles[buf] or {}) do
@@ -739,6 +918,35 @@ function M.reset(buf)
   with_write(buf, function()
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# pi chat", "" })
   end)
+  ensure_bottom_pad(buf)
+end
+
+---@param buf integer
+---@return table[]
+function M.transcript(buf)
+  return transcript_by_buf[buf] or {}
+end
+
+local function push_transcript(buf, role, content)
+  if transcript_skip_record or not buf then
+    return
+  end
+  local t = transcript_by_buf[buf]
+  if not t then
+    t = {}
+    transcript_by_buf[buf] = t
+  end
+  t[#t + 1] = { role = role, content = content }
+end
+
+local function store_transcript(buf, messages)
+  local copy = {}
+  for _, m in ipairs(messages or {}) do
+    if type(m) == "table" and (m.role == "user" or m.role == "assistant") then
+      copy[#copy + 1] = { role = m.role, content = m.content }
+    end
+  end
+  transcript_by_buf[buf] = copy
 end
 
 function M.stick()
@@ -760,18 +968,15 @@ function M.follow(buf, force, win)
   if not force and not stick_bottom then
     return
   end
+  ensure_bottom_pad(buf)
   local last = vim.api.nvim_buf_line_count(buf)
   if last < 1 then
     return
   end
-  local target = last
-  local probe = vim.api.nvim_buf_get_lines(buf, math.max(0, last - 40), last, false)
-  for i = #probe, 1, -1 do
-    if probe[i] ~= "" then
-      target = last - (#probe - i)
-      break
-    end
-  end
+  -- Cursor sits on the first pad line so box bottom virt_lines have room and
+  -- the window floor stays empty (avoids stream jitter / clipped borders).
+  local target = last_content_line(buf)
+  local cursor_line = math.min(last, target + 1)
 
   local wins_list = {}
   if win and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf then
@@ -796,15 +1001,17 @@ function M.follow(buf, force, win)
   for _, w in ipairs(wins_list) do
     if vim.api.nvim_win_is_valid(w) then
       local height = math.max(1, vim.api.nvim_win_get_height(w))
-      local topline = math.max(1, target - height + 1)
+      local pad = math.min(BOTTOM_PAD, math.max(0, height - 1))
+      -- Keep last *content* row `pad` lines above the window floor.
+      local topline = math.max(1, target - height + 1 + pad)
       pcall(function()
         vim.wo[w].scrolloff = 0
       end)
       -- Do NOT steal focus from input — only mutate the chat win view
-      pcall(vim.api.nvim_win_set_cursor, w, { target, 0 })
+      pcall(vim.api.nvim_win_set_cursor, w, { cursor_line, 0 })
       pcall(vim.api.nvim_win_call, w, function()
         vim.fn.winrestview({
-          lnum = target,
+          lnum = cursor_line,
           col = 0,
           topline = topline,
           leftcol = 0,
@@ -887,7 +1094,8 @@ function M.attach_scroll(win, buf)
         return
       end
       local bottom_visible = (view.topline or 1) + height - 1
-      if bottom_visible < last - 1 then
+      -- Follow leaves BOTTOM_PAD blank rows; still "at bottom" within that slack.
+      if bottom_visible < last - BOTTOM_PAD then
         stick_bottom = false
       else
         stick_bottom = true
@@ -971,19 +1179,22 @@ function M.append(buf, line)
   else
     lines = { line }
   end
-  local start0 = vim.api.nvim_buf_line_count(buf)
+  local start0
   with_write(buf, function()
-    vim.api.nvim_buf_set_lines(buf, -1, -1, false, lines)
+    start0 = write_before_pad(buf, lines)
   end)
   decorate_appended(buf, start0, lines)
   last_tool = nil
   schedule_follow(buf)
 end
 
---- Max buffer-line width inside a box (inner minus the post-│ space).
+--- Max buffer-line width inside a box.
+--- Leave 2 cells of slack (same as tool_block): with 'linebreak' on, a line that
+--- only barely fits still soft-wraps the last word onto a showbreak ("↪") row,
+--- which clips the right border and looks like broken wrapping.
 local function content_wrap_width(buf, style)
   local inner = bubble_inner_width(buf, style)
-  return math.max(8, inner - 1)
+  return math.max(8, inner - 1 - 2)
 end
 
 --- Append one logical line, hard-wrapped to the box content width.
@@ -994,11 +1205,12 @@ local function append_wrapped_line(buf, line, style, indent)
   end
 end
 
---- User turn: blue bar + box + light bg (no "you" label)
+--- User turn: blue bar + box + light bg ("you · #N" label)
 function M.append_user(buf, text)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
     return
   end
+  push_transcript(buf, "user", text)
   -- separator outside the bubble; commit_box owns chrome
   in_you_body = false
   in_thinking_body = false
@@ -1006,11 +1218,13 @@ function M.append_user(buf, text)
   close_thinking_box()
   close_assistant_box()
   M.append(buf, "")
-  local start0 = vim.api.nvim_buf_line_count(buf)
+  -- next write lands at content_end0 (pad is not part of the bubble)
+  local start0 = content_end0(buf)
+  local style = make_user_style(buf)
   for line in (tostring(text) .. "\n"):gmatch("(.-)\n") do
-    append_wrapped_line(buf, line, STYLES.user)
+    append_wrapped_line(buf, line, style)
   end
-  commit_box(buf, STYLES.user, start0, vim.api.nvim_buf_line_count(buf))
+  commit_box(buf, style, start0, content_end0(buf))
 end
 
 --- Thinking block: gray text in its own dashed box, no header
@@ -1024,13 +1238,14 @@ function M.append_thinking(buf, text)
   close_thinking_box()
   close_assistant_box()
   M.append(buf, "")
-  local start0 = vim.api.nvim_buf_line_count(buf)
+  local start0 = content_end0(buf)
   for line in (tostring(text) .. "\n"):gmatch("(.-)\n") do
     append_wrapped_line(buf, line, STYLES.thinking)
   end
   in_thinking_body = false
-  local b = commit_box(buf, STYLES.thinking, start0, vim.api.nvim_buf_line_count(buf))
+  local b = commit_box(buf, STYLES.thinking, start0, content_end0(buf))
   attach_thinking_fold(buf, b)
+  maybe_auto_collapse(buf, b)
 end
 
 local function line_count(buf)
@@ -1097,11 +1312,14 @@ local function tool_block(buf, name, args, ok, count, err)
 end
 
 local function append_tool_lines(buf, lines)
-  local first = line_count(buf) + 1
+  -- M.append clears last_tool (non-tool content breaks ×N); keep it across tool rows.
+  local saved = last_tool
+  local first = last_content_line(buf) + 1
   for _, l in ipairs(lines) do
     M.append(buf, l)
   end
-  note_tool_lines(buf, first, line_count(buf))
+  last_tool = saved
+  note_tool_lines(buf, first, last_content_line(buf))
   return first
 end
 
@@ -1119,12 +1337,84 @@ local function mark_error_lines(buf, first, n)
   end
 end
 
+--- Drop a live tool placeholder [start_line, start_line+n) and shift later boxes.
+local function remove_live_tool_lines(buf, start_line, n)
+  if not start_line or not n or n < 1 then
+    return
+  end
+  local s0 = start_line - 1
+  local e0 = s0 + n
+  local list = bubbles[buf] or {}
+  for i = #list, 1, -1 do
+    local b = list[i]
+    if b.start0 >= s0 and b.end0 <= e0 then
+      pcall(vim.api.nvim_buf_clear_namespace, buf, b.ns, 0, -1)
+      table.remove(list, i)
+      if tool_box and tool_box.box == b then
+        tool_box = nil
+      end
+    end
+  end
+  with_write(buf, function()
+    vim.api.nvim_buf_set_lines(buf, s0, e0, false, {})
+  end)
+  for _, b in ipairs(list) do
+    if b.start0 >= e0 then
+      b.start0 = b.start0 - n
+      b.end0 = b.end0 - n
+    end
+  end
+  if think_box and think_box.buf == buf and think_box.box and think_box.box.start0 >= e0 then
+    think_box.box.start0 = think_box.box.start0 - n
+    think_box.box.end0 = think_box.box.end0 - n
+  end
+  if asst_box and asst_box.buf == buf and asst_box.box.start0 >= e0 then
+    asst_box.box.start0 = asst_box.box.start0 - n
+    asst_box.box.end0 = asst_box.box.end0 - n
+  end
+  if last_tool and last_tool.start_line then
+    if last_tool.start_line > start_line then
+      last_tool.start_line = last_tool.start_line - n
+    elseif last_tool.start_line == start_line then
+      last_tool = nil
+    end
+  end
+end
+
+--- While a tool runs: expanded box with "…" mark (OpenCode-style live).
+local function paint_tool_start(buf, id, name, args)
+  close_thinking_box()
+  close_assistant_box()
+  -- New box each run — do not extend the previous finished tool bubble.
+  close_tool_batch()
+  local full = tool_block(buf, name, args, nil, 1, nil)
+  local first = append_tool_lines(buf, full)
+  attach_tool_payload(buf, full, true, false)
+  local meta = pending[id] or {}
+  meta.name = name
+  meta.args = args
+  meta.start_line = first
+  meta.n = #full
+  meta.live = true
+  pending[id] = meta
+  schedule_follow(buf)
+end
+
 --- Render one finished tool call into the chat, folding identical consecutive
 --- calls into the previous block (×N) so a tool loop does not spam the buffer.
-local function upsert_tool_end(buf, name, args, ok, err)
+--- Live start placeholder (if any) is replaced; successful calls auto-collapse.
+local function upsert_tool_end(buf, name, args, ok, err, meta)
+  meta = meta or {}
   local has_err = err and err ~= ""
   local full = tool_block(buf, name, args, ok, 1, err)
   local key = table.concat(full, "\n")
+  local want_expanded = has_err or not auto_fold_enabled()
+
+  -- Drop the in-flight placeholder before merging / painting the final block.
+  if meta.live and meta.start_line and meta.n then
+    remove_live_tool_lines(buf, meta.start_line, meta.n)
+  end
+
   -- Collapse identical consecutive calls onto the first block (×N). The key is
   -- the rendered block text, so a wrapping/capping change breaks the chain the
   -- same way a different call would — no stale ×N left on edited lines.
@@ -1138,20 +1428,35 @@ local function upsert_tool_end(buf, name, args, ok, err)
   then
     last_tool.count = last_tool.count + 1
     full = tool_block(buf, name, args, ok, last_tool.count, err)
-    local expanded = last_tool.expanded ~= false
+    local expanded = want_expanded
     local display = collapse_tool_lines(full, expanded, false)
     with_write(buf, function()
       vim.api.nvim_buf_set_lines(buf, last_tool.start_line - 1, last_tool.start_line - 1 + last_tool.n, false, display)
     end)
-    last_tool.n = #display
+    local new_n = #display
+    local old_n = last_tool.n
+    local delta = new_n - old_n
+    last_tool.n = new_n
     last_tool.full = full
-    note_tool_lines(buf, last_tool.start_line, last_tool.start_line + #display - 1)
+    last_tool.expanded = expanded
+    note_tool_lines(buf, last_tool.start_line, last_tool.start_line + new_n - 1)
     attach_tool_payload(buf, full, expanded, false)
+    if delta ~= 0 then
+      local old_end = last_tool.start_line - 1 + old_n
+      for _, b in ipairs(bubbles[buf] or {}) do
+        if b.start0 >= old_end then
+          b.start0 = b.start0 + delta
+          b.end0 = b.end0 + delta
+        elseif b.start0 == last_tool.start_line - 1 then
+          b.end0 = b.start0 + new_n
+        end
+      end
+    end
     schedule_follow(buf)
     return
   end
-  -- Default expanded (not folded); ftc folds when wanted
-  local display = collapse_tool_lines(full, true, has_err)
+
+  local display = collapse_tool_lines(full, want_expanded, has_err)
   local first = append_tool_lines(buf, display)
   last_tool = {
     key = key,
@@ -1160,12 +1465,13 @@ local function upsert_tool_end(buf, name, args, ok, err)
     start_line = first,
     n = #display,
     full = full,
-    expanded = true,
+    expanded = want_expanded,
   }
-  attach_tool_payload(buf, full, true, has_err)
+  attach_tool_payload(buf, full, want_expanded, has_err)
   if has_err then
     mark_error_lines(buf, first, #display)
   end
+  schedule_follow(buf)
 end
 
 --- `]]` / `[[` navigation between turns. A "turn" is any box start (user, tool,
@@ -1294,6 +1600,17 @@ local function apply_box_expand(buf, target, expanded)
   return true
 end
 
+--- Collapse a finished thinking/tool box unless the user pinned it open, or it errored.
+maybe_auto_collapse = function(buf, box)
+  if not auto_fold_enabled() or not box or box.fold_user_pinned then
+    return
+  end
+  if box.tool_full and box.tool_has_err then
+    return
+  end
+  apply_box_expand(buf, box, false)
+end
+
 --- Toggle collapsed/expanded tool box under the cursor. Returns true if handled.
 function M.toggle_tool_at_cursor(buf, win)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
@@ -1324,7 +1641,9 @@ function M.toggle_tool_at_cursor(buf, win)
   if not lines_differ(target.tool_full, preview) then
     return false
   end
-  return apply_box_expand(buf, target, not target.tool_expanded)
+  local want = not target.tool_expanded
+  target.fold_user_pinned = want and true or false
+  return apply_box_expand(buf, target, want)
 end
 
 --- Toggle fold for all toolcall (`ftc`/`ftt`) or thinking (`ftk`) boxes in a buffer.
@@ -1378,6 +1697,7 @@ function M.toggle_fold_kind(buf, kind)
   end)
   local ok = false
   for _, b in ipairs(boxes) do
+    b.fold_user_pinned = want_expanded and true or false
     if apply_box_expand(buf, b, want_expanded) then
       ok = true
     end
@@ -1388,9 +1708,9 @@ function M.toggle_fold_kind(buf, kind)
   return ok
 end
 
---- Open an answer box (#N label) before the first text_delta of a turn.
+--- Open an answer box ("model · #N" label) before the first text_delta of a turn.
 --- Answers get a full box (not bare text) so their body aligns with toolcall
---- rows; the #N label is assigned at open time, then renumbered on history prepend.
+--- rows; the turn label is assigned at open time, then renumbered on history prepend.
 local function ensure_assistant_header(buf)
   if streaming_thinking then
     streaming_thinking = false
@@ -1441,7 +1761,7 @@ local function append_assistant_line(buf, text)
   if is_md_table_row(text) then
     M.append(buf, text)
     with_write(buf, function()
-      realign_md_table_at(buf, vim.api.nvim_buf_line_count(buf), "")
+      realign_md_table_at(buf, content_end0(buf), "")
     end)
     return
   end
@@ -1458,7 +1778,7 @@ end
 --- column alignment) — they are realigned instead (realign_md_table_at).
 local function append_text_delta(buf, delta)
   delta = tostring(delta):gsub("\r\n", "\n"):gsub("\r", "\n")
-  local start0 = line_count(buf)
+  local start0 = content_end0(buf)
   local extended_last = false
   local is_think = streaming_thinking
   local is_asst = streaming_assistant and not is_think
@@ -1489,51 +1809,52 @@ local function append_text_delta(buf, delta)
   end
 
   with_write(buf, function()
-    local n = line_count(buf)
-    local last = vim.api.nvim_buf_get_lines(buf, n - 1, n, false)[1] or ""
-
     local function write_new(text)
+      local lines
       if text == "" then
-        vim.api.nvim_buf_set_lines(buf, -1, -1, false, { "" })
-        return
-      end
-      if is_asst and is_md_table_row(text) then
-        vim.api.nvim_buf_set_lines(buf, -1, -1, false, { text })
-        return
-      end
-      local line = text
-      if wrap_w then
-        for _, w in ipairs(wrap_line(line, wrap_w, pad)) do
-          vim.api.nvim_buf_set_lines(buf, -1, -1, false, { w })
-        end
+        lines = { "" }
+      elseif is_asst and is_md_table_row(text) then
+        lines = { text }
+      elseif wrap_w then
+        lines = wrap_line(text, wrap_w, pad)
       else
-        vim.api.nvim_buf_set_lines(buf, -1, -1, false, { line })
+        lines = { text }
       end
+      write_before_pad(buf, lines)
     end
 
     local function write_merge(text)
-      n = line_count(buf)
-      last = vim.api.nvim_buf_get_lines(buf, n - 1, n, false)[1] or ""
+      local cl = last_content_line(buf)
+      local last = vim.api.nvim_buf_get_lines(buf, cl - 1, cl, false)[1] or ""
       extended_last = true
       local merged = last .. text
       local body = merged
+      local new_lines
       if is_asst and is_md_table_row(body) then
-        vim.api.nvim_buf_set_lines(buf, n - 1, n, false, { body:gsub("^%s+", "") })
+        new_lines = { body:gsub("^%s+", "") }
       elseif wrap_w and vim.fn.strdisplaywidth(merged) > wrap_w then
-        vim.api.nvim_buf_set_lines(buf, n - 1, n, false, wrap_line(merged, wrap_w, pad))
+        new_lines = wrap_line(merged, wrap_w, pad)
       else
-        vim.api.nvim_buf_set_lines(buf, n - 1, n, false, { merged })
+        new_lines = { merged }
       end
+      local out = {}
+      for _, l in ipairs(new_lines) do
+        out[#out + 1] = l
+      end
+      for _ = 1, BOTTOM_PAD do
+        out[#out + 1] = ""
+      end
+      vim.api.nvim_buf_set_lines(buf, cl - 1, -1, false, out)
     end
 
     for _, c in ipairs(chunks) do
-      n = line_count(buf)
-      last = vim.api.nvim_buf_get_lines(buf, n - 1, n, false)[1] or ""
+      local cl = last_content_line(buf)
+      local last = vim.api.nvim_buf_get_lines(buf, cl - 1, cl, false)[1] or ""
       if c.text ~= "" then
         if stream_at_bol or is_structural_line(last) or last == "" then
           -- non-table text after a table: realign the table above first
           if is_asst and stream_at_bol and not is_md_table_row(c.text) then
-            realign_md_table_at(buf, line_count(buf), pad)
+            realign_md_table_at(buf, content_end0(buf), pad)
           end
           write_new(c.text)
         else
@@ -1543,7 +1864,7 @@ local function append_text_delta(buf, delta)
       elseif c.nl and stream_at_bol then
         -- second newline in a row → blank paragraph; table ended
         if is_asst then
-          realign_md_table_at(buf, line_count(buf), pad)
+          realign_md_table_at(buf, content_end0(buf), pad)
         end
         write_new("")
       end
@@ -1551,12 +1872,12 @@ local function append_text_delta(buf, delta)
         stream_at_bol = true
         -- Row finished: safe to realign (next chars start a new line).
         if is_asst then
-          realign_md_table_at(buf, line_count(buf), pad)
+          realign_md_table_at(buf, content_end0(buf), pad)
         end
       end
     end
   end)
-  local end0 = line_count(buf)
+  local end0 = content_end0(buf)
   local from = extended_last and (start0 - 1) or start0
   if from < 0 then
     from = 0
@@ -1580,7 +1901,12 @@ function M.on_event(buf, ev)
 
   if ev.type == "tool_execution_start" then
     local id = ev.toolCallId or ev.id or tostring(vim.uv.hrtime())
-    pending[id] = { name = ev.toolName, args = ev.args or ev.input or ev.toolArguments }
+    local name = ev.toolName
+    local args = ev.args or ev.input or ev.toolArguments
+    pending[id] = { name = name, args = args }
+    if name then
+      paint_tool_start(buf, id, name, args)
+    end
     return
   end
 
@@ -1595,7 +1921,7 @@ function M.on_event(buf, ev)
     local name = meta.name or ev.toolName
     local args = meta.args or ev.args or ev.input or ev.toolArguments
     local err = ev.isError and result_text(ev.result) or nil
-    upsert_tool_end(buf, name, args, not ev.isError, err)
+    upsert_tool_end(buf, name, args, not ev.isError, err, meta)
     return
   end
 
@@ -1634,7 +1960,7 @@ function M.on_event(buf, ev)
             in_you_body = false
             in_thinking_body = false
             M.append(buf, "")
-            local start0 = vim.api.nvim_buf_line_count(buf)
+            local start0 = content_end0(buf)
             M.append(buf, tostring(err))
             -- paint error red
             local line = vim.api.nvim_buf_get_lines(buf, start0, start0 + 1, false)[1] or ""
@@ -1646,6 +1972,9 @@ function M.on_event(buf, ev)
             vim.schedule(function()
               vim.notify("pi: " .. tostring(err):sub(1, 200), vim.log.levels.ERROR)
             end)
+          else
+            -- Keep unwrapped source for maximize reflow
+            push_transcript(buf, "assistant", m.content)
           end
           break
         end
@@ -1678,6 +2007,7 @@ function M.on_event(buf, ev)
       if think_box and think_box.buf == buf and think_box.box then
         grow_box(think_box.box)
         attach_thinking_fold(buf, think_box.box)
+        maybe_auto_collapse(buf, think_box.box)
       end
       close_thinking_box()
       schedule_follow(buf)
@@ -1687,7 +2017,7 @@ function M.on_event(buf, ev)
       in_thinking_body = false
       close_assistant_box()
       M.append(buf, "")
-      local start0 = vim.api.nvim_buf_line_count(buf)
+      local start0 = content_end0(buf)
       M.append(buf, tostring(err))
       local line = vim.api.nvim_buf_get_lines(buf, start0, start0 + 1, false)[1] or ""
       pcall(vim.api.nvim_buf_set_extmark, buf, role_ns, start0, 0, {
@@ -1851,18 +2181,19 @@ local function paint_messages(buf, messages)
           in_you_body = false
           in_thinking_body = false
           M.append(buf, "")
-          local start0 = vim.api.nvim_buf_line_count(buf)
+          local start0 = content_end0(buf)
           for line in (parts.text .. "\n"):gmatch("(.-)\n") do
             append_assistant_line(buf, line)
           end
-          commit_box(buf, make_assistant_style(buf), start0, vim.api.nvim_buf_line_count(buf))
+          commit_box(buf, make_assistant_style(buf), start0, content_end0(buf))
         end
         if parts.tool_calls and #parts.tool_calls > 0 then
           for _, call in ipairs(parts.tool_calls) do
             local full = tool_block(buf, call.name, call.args, nil, 1)
-            local display = collapse_tool_lines(full, true, false)
+            local expanded = not auto_fold_enabled()
+            local display = collapse_tool_lines(full, expanded, false)
             append_tool_lines(buf, display)
-            attach_tool_payload(buf, full, true, false)
+            attach_tool_payload(buf, full, expanded, false)
           end
         elseif parts.tools and parts.tools > 0 then
           append_tool_lines(buf, { string.format("⚙ %d tool call(s)", parts.tools) })
@@ -2006,6 +2337,7 @@ function M.load_older(buf, win)
   bubbles[tmp] = nil
   pcall(vim.api.nvim_buf_delete, tmp, { force = true })
   renumber_assistant_boxes(buf)
+  renumber_user_boxes(buf)
   if not history_by_buf[buf] and vim.api.nvim_buf_get_lines(buf, 2, 3, false)[1] == OLDER_MARK then
     with_write(buf, function()
       vim.api.nvim_buf_set_lines(buf, 2, 3, false, {})
@@ -2044,7 +2376,10 @@ function M.hydrate(buf, messages, opts)
   if opts.history then
     M.append(buf, OLDER_MARK)
   end
+  transcript_skip_record = true
   local count = paint_messages(buf, messages)
+  transcript_skip_record = false
+  store_transcript(buf, messages)
   if opts.footer ~= false then
     M.append(buf, opts.footer or "· resumed session")
   end
@@ -2053,9 +2388,42 @@ function M.hydrate(buf, messages, opts)
   return count
 end
 
-local REVIEW_HINT_RE = "^◎ %d+ files? pending review"
+--- Re-wrap buffered transcript at the current (or pinned) window width.
+---@param buf integer
+---@param opts { win?: integer, footer?: string|false, messages?: table[] }|nil
+---@return boolean
+function M.reflow(buf, opts)
+  opts = opts or {}
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return false
+  end
+  local messages = opts.messages
+  if not messages or #messages == 0 then
+    messages = transcript_by_buf[buf]
+  end
+  if not messages or #messages == 0 then
+    return false
+  end
+  local footer = opts.footer
+  if footer == nil then
+    footer = "·"
+  end
+  local win = opts.win
+  local function paint()
+    M.hydrate(buf, messages, { footer = footer })
+  end
+  if win and vim.api.nvim_win_is_valid(win) then
+    M.with_avail_win(win, paint)
+  else
+    paint()
+  end
+  return true
+end
 
---- After agent_end: remind if host-tool edits are waiting for Accept/Reject.
+local REVIEW_HINT_RE = "^◎ %d+ files? ·"
+
+--- After agent_end: remind if host-tool edits can be previewed; optional silent write.
+--- Hint lives on the last content line (before BOTTOM_PAD blanks), not buf[-2].
 function M.note_pending_review(buf)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
     return
@@ -2064,20 +2432,27 @@ function M.note_pending_review(buf)
   pcall(function()
     n = #require("pi.session").touched()
   end)
+  if n > 0 then
+    pcall(function()
+      require("pi.review").write_pending()
+    end)
+  end
   local line
   if n <= 0 then
     line = nil
   elseif n == 1 then
-    line = "◎ 1 file pending review · :PiDiff"
+    line = "◎ 1 file · <C-r> preview · <C-o> all"
   else
-    line = string.format("◎ %d files pending review · :PiDiff", n)
+    line = string.format("◎ %d files · <C-r> preview · <C-o> all", n)
   end
-  local last = vim.api.nvim_buf_get_lines(buf, -2, -1, false)[1] or ""
+  ensure_bottom_pad(buf)
+  local cl = last_content_line(buf)
+  local last = (cl >= 1) and (vim.api.nvim_buf_get_lines(buf, cl - 1, cl, false)[1] or "") or ""
   local prev_is_hint = last:match(REVIEW_HINT_RE) ~= nil
   if not line then
     if prev_is_hint then
       with_write(buf, function()
-        vim.api.nvim_buf_set_lines(buf, -2, -1, false, {})
+        vim.api.nvim_buf_set_lines(buf, cl - 1, cl, false, {})
       end)
     end
     pcall(function()
@@ -2087,14 +2462,14 @@ function M.note_pending_review(buf)
   end
   if prev_is_hint then
     with_write(buf, function()
-      vim.api.nvim_buf_set_lines(buf, -2, -1, false, { line })
+      vim.api.nvim_buf_set_lines(buf, cl - 1, cl, false, { line })
     end)
   else
     M.append(buf, "")
-    local start0 = vim.api.nvim_buf_line_count(buf)
     M.append(buf, line)
-    local painted = vim.api.nvim_buf_get_lines(buf, start0, start0 + 1, false)[1] or line
-    pcall(vim.api.nvim_buf_set_extmark, buf, role_ns, start0, 0, {
+    local hint0 = last_content_line(buf) - 1
+    local painted = vim.api.nvim_buf_get_lines(buf, hint0, hint0 + 1, false)[1] or line
+    pcall(vim.api.nvim_buf_set_extmark, buf, role_ns, hint0, 0, {
       end_col = #painted,
       hl_group = "PiReview",
       hl_eol = true,

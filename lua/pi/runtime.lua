@@ -437,6 +437,86 @@ function M.hydrate_chat(opts)
   client.send({ type = "get_messages", id = HYDRATE_ID })
 end
 
+--- Resolve session jsonl path for reflow (disk first — get_messages can stall).
+---@param client table|nil
+---@param opts { session_file?: string }|nil
+---@return string|nil
+local function reflow_session_path(client, opts)
+  opts = opts or {}
+  if type(opts.session_file) == "string" and opts.session_file ~= "" then
+    return opts.session_file
+  end
+  local singleton = require("pi.client")
+  -- Default slot: session module is already kept in sync (avoid extra RPC).
+  if not client or client == singleton then
+    local path
+    pcall(function()
+      path = require("pi.session").get().session_file
+    end)
+    if type(path) == "string" and path ~= "" then
+      return path
+    end
+  end
+  if not client or not client.is_running or not client.is_running() or not client.request then
+    return nil
+  end
+  local resp = select(1, client.request({ type = "get_state", id = "reflow-state" }, 4000))
+  if resp and resp.success and type(resp.data) == "table" then
+    local p = resp.data.sessionFile or resp.data.session_file
+    if type(p) == "string" and p ~= "" then
+      return p
+    end
+  end
+  return nil
+end
+
+--- Re-paint `buf` from session messages at the current window width
+--- (hard-wrapped bubbles do not reflow on float resize alone).
+--- Order: in-memory transcript → disk session file → RPC get_messages.
+---@param buf integer
+---@param opts { client?: table, quiet?: boolean, footer?: string|false, win?: integer, session_file?: string }|nil
+---@return boolean
+function M.reflow_buf(buf, opts)
+  opts = opts or {}
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return false
+  end
+  local render = require("pi.render")
+  local footer = opts.footer
+  if footer == nil then
+    footer = "·"
+  end
+  -- Fast path: messages already painted into this buffer (live chat).
+  if render.reflow(buf, { win = opts.win, footer = footer }) then
+    return true
+  end
+  local client = opts.client or M.rpc_client()
+  local messages = {}
+  local path = reflow_session_path(client, opts)
+  if path then
+    local loaded = select(1, require("pi.sessions").load_messages(path))
+    if type(loaded) == "table" and #loaded > 0 then
+      messages = loaded
+    end
+  end
+  if #messages == 0 and client and client.is_running and client.is_running() and client.request then
+    local resp, err = client.request({ type = "get_messages", id = "reflow-msgs" }, 12000)
+    if not resp or not resp.success then
+      if not opts.quiet then
+        vim.notify("pi: reflow failed: " .. tostring(err or (resp and resp.error) or "?"), vim.log.levels.WARN)
+      end
+      pcall(render.repaint, buf)
+      return false
+    end
+    messages = render.normalize_messages(resp.data or {})
+  end
+  if #messages == 0 then
+    pcall(render.repaint, buf)
+    return false
+  end
+  return render.reflow(buf, { win = opts.win, footer = footer, messages = messages })
+end
+
 local function schedule_resume(cwd)
   if resume_scheduled then
     return
@@ -706,7 +786,14 @@ end
 --- Fuzzy-pick a model (get_available_models → vim.ui.select → set_model)
 function M.pick_model()
   M.ensure_started()
-  local client = require("pi.client")
+  pcall(function()
+    require("pi.slots").ensure_primary_job()
+  end)
+  local client = M.rpc_client()
+  if not client.is_running() then
+    vim.notify("pi: RPC not running", vim.log.levels.ERROR)
+    return
+  end
   local resp, err = client.request({ type = "get_available_models", id = "get-models" }, 15000)
   if not resp or not resp.success then
     vim.notify("pi: get_available_models failed: " .. tostring(err or (resp and resp.error) or "?"), vim.log.levels.ERROR)
@@ -749,28 +836,38 @@ function M.pick_model()
     by_label[label] = m
   end
 
-  vim.ui.select(labels, { prompt = "pi model" }, function(item)
-    if not item then
-      return
-    end
-    local m = by_label[item]
-    if not m or not m.id or not m.provider then
-      vim.notify("pi: invalid model selection", vim.log.levels.WARN)
-      return
-    end
-    client.send({
-      type = "set_model",
-      provider = m.provider,
-      modelId = m.id,
-      id = "set-model",
-    })
+  require("pi.ui").with_picker(function(done)
+    vim.ui.select(labels, { prompt = "pi model" }, function(item)
+      done()
+      if not item then
+        return
+      end
+      local m = by_label[item]
+      if not m or not m.id or not m.provider then
+        vim.notify("pi: invalid model selection", vim.log.levels.WARN)
+        return
+      end
+      client.send({
+        type = "set_model",
+        provider = m.provider,
+        modelId = m.id,
+        id = "set-model",
+      })
+    end)
   end)
 end
 
 --- Fuzzy-pick thinking level for current model
 function M.pick_thinking()
   M.ensure_started()
-  local client = require("pi.client")
+  pcall(function()
+    require("pi.slots").ensure_primary_job()
+  end)
+  local client = M.rpc_client()
+  if not client.is_running() then
+    vim.notify("pi: RPC not running", vim.log.levels.ERROR)
+    return
+  end
   local resp, err = client.request({ type = "get_available_thinking_levels", id = "get-think" }, 10000)
   if not resp or not resp.success then
     vim.notify("pi: get_available_thinking_levels failed: " .. tostring(err or (resp and resp.error) or "?"), vim.log.levels.ERROR)
@@ -792,16 +889,19 @@ function M.pick_thinking()
     table.insert(labels, s)
   end
 
-  vim.ui.select(labels, { prompt = "pi thinking" }, function(item)
-    if not item then
-      return
-    end
-    local level = item:gsub("^●%s*", "")
-    client.send({
-      type = "set_thinking_level",
-      level = level,
-      id = "set-think",
-    })
+  require("pi.ui").with_picker(function(done)
+    vim.ui.select(labels, { prompt = "pi thinking" }, function(item)
+      done()
+      if not item then
+        return
+      end
+      local level = item:gsub("^●%s*", "")
+      client.send({
+        type = "set_thinking_level",
+        level = level,
+        id = "set-think",
+      })
+    end)
   end)
 end
 

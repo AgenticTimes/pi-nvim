@@ -9,6 +9,8 @@ local fullscreen = true -- default: edge-to-edge chat
 local editor_win ---@type integer|nil
 local backdrop = { buf = nil, win = nil }
 local tree_was_open = false
+--- Nested vim.ui.select / telescope above pi; suppress apply_layout re-covering.
+local picker_depth = 0
 
 --- Opaque full-editor underlay so NvimTree/Oil cannot peek through float margins.
 function M.ensure_backdrop()
@@ -185,7 +187,9 @@ local function configure_chat_win(win)
   vim.wo[win].wrap = true
   vim.wo[win].linebreak = true
   vim.wo[win].breakindent = true
-  vim.wo[win].showbreak = "↪ "
+  -- Empty: hard-wrap owns line breaks. A visible showbreak ("↪ ") marks soft-wrap
+  -- leftovers and makes thinking/answer boxes look inconsistently wrapped.
+  vim.wo[win].showbreak = ""
   vim.wo[win].signcolumn = "no"
   pcall(function()
     vim.wo[win].winhl = "Normal:PiChatNormal,NormalFloat:PiChatNormal,EndOfBuffer:PiChatNormal,FloatBorder:PiChatBorder"
@@ -452,8 +456,9 @@ function M.set_input_zindex(z)
   pcall(vim.api.nvim_win_set_config, wins.input, cfg)
 end
 
-local PICKER_BEHIND_Z = 40
+local PICKER_BEHIND_Z = 42 -- chat/slots under picker; above backdrop (40)
 local ASK_DEFAULT_Z = 60
+local PICKER_Z = 200 -- must sit above ask (60)
 
 --- Focus existing ask win only (no open_input / inject_yank)
 local function refocus_input_win()
@@ -469,28 +474,141 @@ local function refocus_input_win()
   end
 end
 
---- Run a picker while ask (if open) sits behind it.
+local function is_ask_win(win)
+  if wins.input and win == wins.input then
+    return true
+  end
+  local ok, name = pcall(function()
+    return vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win))
+  end)
+  return ok and type(name) == "string" and name:match("pi://input") ~= nil
+end
+
+--- Place Telescope floats just above the ask popup (spatial + zindex).
+local function place_telescope_above_ask()
+  if not wins.input or not vim.api.nvim_win_is_valid(wins.input) then
+    return
+  end
+  local ac = vim.api.nvim_win_get_config(wins.input)
+  local ask_row = ac.row or 0
+  local ask_col = ac.col or 0
+  local ask_w = ac.width or math.floor(vim.o.columns * 0.6)
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    local ok_ft, ft = pcall(function()
+      return vim.bo[vim.api.nvim_win_get_buf(w)].filetype
+    end)
+    if ok_ft and type(ft) == "string" and ft:match("^Telescope") then
+      local cfg = vim.api.nvim_win_get_config(w)
+      if cfg.relative and cfg.relative ~= "" then
+        local h = cfg.height or 10
+        cfg.row = math.max(0, ask_row - h - 1)
+        cfg.col = ask_col
+        cfg.width = ask_w
+        cfg.zindex = PICKER_Z
+        pcall(vim.api.nvim_win_set_config, w, cfg)
+      end
+    end
+  end
+end
+
+--- Lower chat/slots only — never sink ask; picker must sit on top of the input.
+---@return { win: integer, zindex: integer|nil }[]
+local function lower_pi_floats_for_picker()
+  local saved = {}
+  local seen = {}
+  local function lower_win(win, z)
+    if not win or seen[win] or not vim.api.nvim_win_is_valid(win) then
+      return
+    end
+    if is_ask_win(win) then
+      return
+    end
+    local cfg = vim.api.nvim_win_get_config(win)
+    if not cfg.relative or cfg.relative == "" then
+      return
+    end
+    seen[win] = true
+    saved[#saved + 1] = { win = win, zindex = cfg.zindex }
+    cfg.zindex = z
+    pcall(vim.api.nvim_win_set_config, win, cfg)
+  end
+  lower_win(wins.chat, PICKER_BEHIND_Z)
+  lower_win(wins.todos, PICKER_BEHIND_Z)
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    local ok, name = pcall(function()
+      return vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(w))
+    end)
+    if ok and type(name) == "string" and name:match("^pi://") then
+      lower_win(w, PICKER_BEHIND_Z)
+    end
+  end
+  return saved
+end
+
+local function restore_pi_floats(saved)
+  for _, s in ipairs(saved or {}) do
+    if s.win and vim.api.nvim_win_is_valid(s.win) then
+      local cfg = vim.api.nvim_win_get_config(s.win)
+      cfg.zindex = s.zindex or ASK_DEFAULT_Z
+      pcall(vim.api.nvim_win_set_config, s.win, cfg)
+    end
+  end
+  -- Slot titles / focus borders expect apply_layout zindexes (only when no picker left)
+  if picker_depth > 0 then
+    return
+  end
+  pcall(function()
+    local slots = require("pi.slots")
+    if slots.is_visible() and slots.count() > 0 then
+      slots.apply_layout()
+    end
+  end)
+end
+
+--- Run a picker while chat/slots sit behind it; ask stays put.
+--- Telescope is repositioned just above the ask float.
 --- `open_fn(done)` must call `done()` when the picker closes (select or cancel).
 ---@param open_fn fun(done: fun())
 function M.with_picker(open_fn)
   local had_input = M.is_input_open()
-  if had_input then
-    M.set_input_zindex(PICKER_BEHIND_Z)
-  end
+  local saved = lower_pi_floats_for_picker()
   local finished = false
+  picker_depth = picker_depth + 1
+  local aug = vim.api.nvim_create_augroup("PiPickerAboveAsk", { clear = true })
+  vim.api.nvim_create_autocmd("WinNew", {
+    group = aug,
+    callback = function()
+      vim.schedule(place_telescope_above_ask)
+    end,
+  })
+  vim.api.nvim_create_autocmd("FileType", {
+    group = aug,
+    pattern = "TelescopePrompt",
+    callback = function()
+      vim.schedule(place_telescope_above_ask)
+    end,
+  })
   local function done()
     if finished then
       return
     end
     finished = true
+    picker_depth = math.max(0, picker_depth - 1)
+    pcall(vim.api.nvim_del_augroup_by_id, aug)
+    restore_pi_floats(saved)
     if had_input then
-      M.set_input_zindex(ASK_DEFAULT_Z)
       refocus_input_win()
     end
   end
   vim.schedule(function()
     open_fn(done)
+    vim.schedule(place_telescope_above_ask)
   end)
+end
+
+--- True while a vim.ui.select / telescope picker is open above pi.
+function M.picker_active()
+  return picker_depth > 0
 end
 
 function M.is_fullscreen()
@@ -507,6 +625,9 @@ end
 --- the window and re-applies window options (wrap, signcolumn) on every call.
 local function apply_chat_layout()
   if not M.is_open() then
+    return
+  end
+  if M.picker_active() then
     return
   end
   -- Multi-slot: slots.apply_layout owns geometry + ○ #N titles. Expanding the
@@ -885,6 +1006,19 @@ local function map_ui_keys()
   vim.keymap.set("n", "ftk", fold_think, vim.tbl_extend("force", opts_c, { desc = "pi: fold/unfold thinking" }))
   vim.keymap.set("n", "<localleader>tc", fold_tools, vim.tbl_extend("force", opts_c, { desc = "pi: fold/unfold toolcalls" }))
   vim.keymap.set("n", "<localleader>tk", fold_think, vim.tbl_extend("force", opts_c, { desc = "pi: fold/unfold thinking" }))
+
+  local preview = k.preview or "<C-r>"
+  local preview_all = k.preview_all or "<C-o>"
+  if preview and preview ~= "" then
+    vim.keymap.set("n", preview, function()
+      require("pi.review").preview()
+    end, vim.tbl_extend("force", opts_c, { desc = "pi: preview latest edit" }))
+  end
+  if preview_all and preview_all ~= "" then
+    vim.keymap.set("n", preview_all, function()
+      require("pi.review").preview_all()
+    end, vim.tbl_extend("force", opts_c, { desc = "pi: preview all edits" }))
+  end
 
   local tab = k.focus_cycle or "<Tab>"
   vim.keymap.set("n", tab, function()

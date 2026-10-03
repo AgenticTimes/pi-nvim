@@ -822,6 +822,8 @@ local function configure_win(win, slot, focused)
   end
   vim.wo[win].wrap = true
   vim.wo[win].linebreak = true
+  vim.wo[win].breakindent = true
+  vim.wo[win].showbreak = ""
   vim.wo[win].signcolumn = "no"
   local base = tonumber((require("pi.config").opts.window or {}).winblend) or 0
   -- Multi-slot must stay opaque: any winblend lets neo-tree/explorer bleed through.
@@ -1441,10 +1443,40 @@ function M.maximize_restore()
   if not maximized_id then
     return false
   end
+  local prev = maximized_id
   maximized_id = nil
   if visible or require("pi.ui").is_open() then
     M.apply_layout()
   end
+  -- Hard-wrapped text must be re-hydrated at each tile's new width.
+  vim.defer_fn(function()
+    for _, s in ipairs(slots) do
+      if not s.parked and s.chat_buf and not s.is_viewer then
+        local client = s.is_default and default_client() or s.client
+        if client then
+          pcall(function()
+            require("pi.runtime").reflow_buf(s.chat_buf, {
+              client = client,
+              win = s.win,
+              quiet = true,
+            })
+          end)
+        else
+          pcall(function()
+            require("pi.render").repaint(s.chat_buf)
+          end)
+        end
+      elseif not s.parked and s.chat_buf then
+        pcall(function()
+          require("pi.render").repaint(s.chat_buf)
+        end)
+      end
+    end
+    local s = find(prev)
+    if s and s.win and vim.api.nvim_win_is_valid(s.win) then
+      pcall(vim.api.nvim__redraw, { win = s.win, valid = true, flush = true })
+    end
+  end, 30)
   return true
 end
 
@@ -1479,6 +1511,43 @@ function M.maximize_by_id(n)
     M.set_primary(n)
   end
   M.apply_layout()
+  -- Hard-wrapped bubbles keep the old pane width until re-hydrated.
+  vim.defer_fn(function()
+    local s = find(n)
+    if not s or not s.chat_buf then
+      return
+    end
+    if s.win and vim.api.nvim_win_is_valid(s.win) then
+      pcall(vim.api.nvim_set_current_win, s.win)
+    end
+    if s.is_viewer then
+      pcall(function()
+        require("pi.render").repaint(s.chat_buf)
+        require("pi.render").follow(s.chat_buf, true, s.win)
+      end)
+      return
+    end
+    local client = s.is_default and default_client() or s.client
+    local ok = false
+    if client then
+      pcall(function()
+        ok = require("pi.runtime").reflow_buf(s.chat_buf, {
+          client = client,
+          win = s.win,
+          quiet = false,
+        })
+      end)
+    end
+    if not ok then
+      pcall(function()
+        require("pi.render").repaint(s.chat_buf)
+        require("pi.render").follow(s.chat_buf, true, s.win)
+      end)
+    end
+    if s.win and vim.api.nvim_win_is_valid(s.win) then
+      pcall(vim.api.nvim__redraw, { win = s.win, valid = true, flush = true })
+    end
+  end, 30)
   return true
 end
 
@@ -1552,6 +1621,11 @@ function M.maximize_ask()
 end
 
 function M.apply_layout()
+  -- Streaming / resize must not re-raise floats over an open Telescope picker.
+  local ok_ui, ui = pcall(require, "pi.ui")
+  if ok_ui and ui.picker_active and ui.picker_active() then
+    return
+  end
   if #slots == 0 then
     return
   end
@@ -1633,6 +1707,14 @@ function M.apply_layout()
           require("pi.render").attach_scroll(slot.win, slot.chat_buf)
           require("pi.render").follow(slot.chat_buf, true, slot.win)
         end)
+      end
+      -- nvim_win_set_config on floats often skips WinResized — force box chrome
+      -- to the new width (maximize / restore / retile).
+      pcall(function()
+        require("pi.render").repaint(slot.chat_buf)
+      end)
+      if slot.win and vim.api.nvim_win_is_valid(slot.win) then
+        pcall(vim.api.nvim__redraw, { win = slot.win, valid = true, flush = true })
       end
     end
   end

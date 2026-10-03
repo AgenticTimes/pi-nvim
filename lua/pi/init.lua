@@ -88,6 +88,14 @@ function M.reject()
   return require("pi.review").reject()
 end
 
+function M.preview()
+  return require("pi.review").preview()
+end
+
+function M.preview_all()
+  return require("pi.review").preview_all()
+end
+
 function M.diff_next()
   return require("pi.review").next(1)
 end

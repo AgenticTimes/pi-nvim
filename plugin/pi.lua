@@ -33,8 +33,12 @@ vim.api.nvim_create_user_command("PiNewSession", function()
 end, { desc = "Start new pi session" })
 
 vim.api.nvim_create_user_command("PiDiff", function()
-  require("pi.review").open(1)
-end, { desc = "Open pi review diff" })
+  require("pi.review").preview()
+end, { desc = "Preview latest pi edit (BEFORE/AFTER)" })
+
+vim.api.nvim_create_user_command("PiPreviewAll", function()
+  require("pi.review").preview_all()
+end, { desc = "Preview all pending pi edits" })
 
 vim.api.nvim_create_user_command("PiAccept", function()
   require("pi").accept()
@@ -177,3 +181,21 @@ vim.api.nvim_create_user_command("PiMaximize", function(opts)
   end
   require("pi.slots").maximize_by_id(n)
 end, { nargs = "?", desc = "Maximize slot #N, or restore tiles if none / already solo" })
+
+vim.api.nvim_create_user_command("PiReflow", function()
+  local slots = require("pi.slots")
+  local s = slots.primary()
+  if not s or not s.chat_buf then
+    vim.notify("pi: no primary chat to reflow", vim.log.levels.WARN)
+    return
+  end
+  local client = s.is_default and require("pi.client") or s.client
+  local ok = require("pi.runtime").reflow_buf(s.chat_buf, {
+    client = client,
+    win = s.win,
+    quiet = false,
+  })
+  if ok then
+    vim.notify("pi: reflowed #" .. tostring(s.id), vim.log.levels.INFO)
+  end
+end, { desc = "Re-wrap primary chat bubbles to current window width" })

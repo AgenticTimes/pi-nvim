@@ -87,11 +87,12 @@ render.on_event(tb, {
   result = { content = { { type = "text", text = "command not found" } } },
 })
 local tjoin = table.concat(vim.api.nvim_buf_get_lines(tb, 0, -1, false), "\n")
-h.assert_truthy(tjoin:find("  path: demo/sample.lua", 1, true), "read arg line: " .. tjoin)
-h.assert_truthy(tjoin:find("  offset: 10", 1, true), "offset arg line")
-h.assert_truthy(tjoin:find("  limit: 20", 1, true), "limit arg line")
-h.assert_truthy(tjoin:find("  $ git status --short", 1, true), "bash command shown: " .. tjoin)
-h.assert_false(tjoin:find("command:", 1, true), "bash uses $ form, not command:")
+-- successful tools auto-fold; headers stay, arg bodies hide until ftt
+h.assert_truthy(tjoin:find("⚙ read_buffer", 1, true), "read tool header: " .. tjoin)
+h.assert_truthy(tjoin:find("⚙ bash", 1, true), "bash tool header")
+h.assert_truthy(tjoin:find("ftt to expand", 1, true), "auto-folded success tools")
+h.assert_false(tjoin:find("  path: demo/sample.lua", 1, true), "read args hidden while folded")
+-- errors stay expanded
 h.assert_truthy(tjoin:find("  ! command not found", 1, true), "tool error text")
 h.assert_truthy(tjoin:find("✗", 1, true), "failure mark")
 -- the three tool calls form one contiguous box
@@ -129,8 +130,8 @@ render.on_event(lb, {
   isError = false,
 })
 local ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
-h.assert_truthy(ljoin:find("line7", 1, true), "default expanded shows tail: " .. ljoin)
-h.assert_false(ljoin:find("%+.*lines", 1, false), "no collapse body marker while expanded")
+h.assert_truthy(ljoin:find("ftt to expand", 1, true), "auto-folded after tool end: " .. ljoin)
+h.assert_false(ljoin:find("line7", 1, true), "tail hidden while auto-folded")
 local lwin = vim.api.nvim_open_win(lb, true, {
   relative = "editor",
   width = 60,
@@ -145,19 +146,19 @@ for i, l in ipairs(vim.api.nvim_buf_get_lines(lb, 0, -1, false)) do
     break
   end
 end
+h.assert_truthy(render.toggle_tool_at_cursor(lb, lwin), "toggle expands")
+ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
+h.assert_truthy(ljoin:find("line7", 1, true), "tail visible when expanded")
 h.assert_truthy(render.toggle_tool_at_cursor(lb, lwin), "toggle collapses")
 ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
 h.assert_truthy(ljoin:find("ftt to expand", 1, true), "collapse marker ftt to expand: " .. ljoin)
 h.assert_false(ljoin:find("line7", 1, true), "tail hidden while collapsed")
-h.assert_truthy(render.toggle_tool_at_cursor(lb, lwin), "toggle expands")
-ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
-h.assert_truthy(ljoin:find("line7", 1, true), "tail visible when expanded")
-h.assert_truthy(render.toggle_fold_kind(lb, "tool"), "ftt folds all tools")
-ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
-h.assert_truthy(ljoin:find("ftt to expand", 1, true), "ftt to expand folded")
 h.assert_truthy(render.toggle_fold_kind(lb, "tool"), "ftt expands all tools")
 ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
 h.assert_truthy(ljoin:find("line7", 1, true), "ftt expanded again")
+h.assert_truthy(render.toggle_fold_kind(lb, "tool"), "ftt folds all tools")
+ljoin = table.concat(vim.api.nvim_buf_get_lines(lb, 0, -1, false), "\n")
+h.assert_truthy(ljoin:find("ftt to expand", 1, true), "ftt to expand folded")
 pcall(vim.api.nvim_win_close, lwin, true)
 
 -- assistant text has no role header (OpenCode-style)
@@ -228,22 +229,43 @@ local other = vim.api.nvim_open_win(tmp, true, {
 render.stick()
 local chat_win = win
 render.follow(b, true, chat_win)
-h.assert_eq(vim.api.nvim_win_get_cursor(win)[1], vim.api.nvim_buf_line_count(b), "followed to bottom")
+local last_line = vim.api.nvim_buf_line_count(b)
+local content_line = last_line
+local lines_tail = vim.api.nvim_buf_get_lines(b, math.max(0, last_line - 5), last_line, false)
+local te = 0
+for i = #lines_tail, 1, -1 do
+  if lines_tail[i] == "" then
+    te = te + 1
+  else
+    break
+  end
+end
+h.assert_truthy(te >= 2, "buffer keeps ≥2 trailing blank lines: " .. te)
+content_line = last_line - te
+h.assert_eq(vim.api.nvim_win_get_cursor(win)[1], math.min(last_line, content_line + 1), "cursor on first pad line")
+local view = vim.api.nvim_win_call(win, function()
+  return vim.fn.winsaveview()
+end)
+-- height=8, pad=2 → topline = content - 8 + 1 + 2 = content - 5
+h.assert_eq(view.topline, math.max(1, content_line - 5), "follow leaves 2 blank rows at bottom")
 
 render.unstick()
 vim.api.nvim_win_set_cursor(win, { 2, 0 })
 render.follow(b, false, chat_win)
 h.assert_eq(vim.api.nvim_win_get_cursor(win)[1], 2, "unstick + follow(false) keeps cursor")
 render.follow(b, true, chat_win)
-h.assert_eq(vim.api.nvim_win_get_cursor(win)[1], vim.api.nvim_buf_line_count(b), "force follows")
+h.assert_eq(vim.api.nvim_win_get_cursor(win)[1], math.min(last_line, content_line + 1), "force follows to pad")
 
 -- multiline append must not error (nvim forbids \\n in a single set_lines item)
-local before = vim.api.nvim_buf_line_count(b)
+-- Inserts before the 2-line bottom pad, so slice from content_end.
+local before = math.max(0, vim.api.nvim_buf_line_count(b) - 2)
 render.append(b, "line-a\nline-b\nline-c")
 local after = vim.api.nvim_buf_get_lines(b, before, -1, false)
-h.assert_eq(#after, 3, "split into 3 lines")
 h.assert_eq(after[1], "line-a", "a")
+h.assert_eq(after[2], "line-b", "b")
 h.assert_eq(after[3], "line-c", "c")
+h.assert_eq(after[4], "", "pad1")
+h.assert_eq(after[5], "", "pad2")
 
 -- API errors surface in chat (previously looked like silent no-response)
 render.on_event(b, { type = "agent_start" })
@@ -293,8 +315,9 @@ render.on_event(b, {
 lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
 joined = table.concat(lines, "\n")
 h.assert_false(joined:find("### thinking", 1, true), "no thinking header")
-h.assert_truthy(joined:find("step one", 1, true), "thinking line1")
-h.assert_truthy(joined:find("step two", 1, true), "thinking line2")
+h.assert_truthy(joined:find("step one", 1, true), "thinking line1 kept as fold preview")
+h.assert_false(joined:find("step two", 1, true), "thinking body auto-folded")
+h.assert_truthy(joined:find("ftk to expand", 1, true), "thinking fold hint")
 h.assert_false(joined:find("### assistant", 1, true), "no assistant header")
 h.assert_truthy(joined:find("final answer", 1, true), "answer text")
 local answer_line
@@ -328,7 +351,7 @@ for name, ns in pairs(ns_list) do
 end
 h.assert_truthy(has_asst_box, "answer boxed with left chrome")
 
--- successive final answers get #1, #2 in the top-left label slot
+-- successive final answers get "pi · #1", "pi · #2" (or model · #N) in the top-left label
 local function collect_turn_labels(buf)
   local labels = {}
   for name, ns in pairs(vim.api.nvim_get_namespaces()) do
@@ -338,8 +361,9 @@ local function collect_turn_labels(buf)
         if vl then
           for _, row in ipairs(vl) do
             for _, chunk in ipairs(row) do
-              if chunk[2] == "PiAssistant" and tostring(chunk[1]):match("^#%d+$") then
-                labels[#labels + 1] = chunk[1]
+              local t = tostring(chunk[1])
+              if chunk[2] == "PiAssistant" and t:match("· #%d+$") then
+                labels[#labels + 1] = t
               end
             end
           end
@@ -369,8 +393,8 @@ render.on_event(b, {
   assistantMessageEvent = { type = "text_end" },
 })
 local turn_labels = collect_turn_labels(b)
-h.assert_truthy(vim.tbl_contains(turn_labels, "#1"), "first answer labeled #1")
-h.assert_truthy(vim.tbl_contains(turn_labels, "#2"), "second answer labeled #2")
+h.assert_truthy(vim.tbl_contains(turn_labels, "pi · #1"), "first answer labeled pi · #1")
+h.assert_truthy(vim.tbl_contains(turn_labels, "pi · #2"), "second answer labeled pi · #2")
 
 -- markdown tables pad columns to display width (CJK-safe); box supplies the gutter
 render.on_event(b, { type = "agent_start" })
@@ -510,18 +534,18 @@ session.record_edit({ path = "r2", rel = "r2", before = { "y" }, buf = 0 })
 render.on_event(b, { type = "agent_end" })
 lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
 joined = table.concat(lines, "\n")
-h.assert_truthy(joined:find("◎ 2 files pending review · :PiDiff", 1, true), "plural review hint")
+h.assert_truthy(joined:find("◎ 2 files · <C-r> preview · <C-o> all", 1, true), "plural review hint")
 session.remove_touched(1)
 render.note_pending_review(b)
 lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
 joined = table.concat(lines, "\n")
-h.assert_truthy(joined:find("◎ 1 file pending review · :PiDiff", 1, true), "singular review hint")
+h.assert_truthy(joined:find("◎ 1 file · <C-r> preview · <C-o> all", 1, true), "singular review hint")
 h.assert_false(joined:find("◎ 2 files", 1, true), "count updated in place")
 session.remove_touched(1)
 render.note_pending_review(b)
 lines = vim.api.nvim_buf_get_lines(b, 0, -1, false)
 joined = table.concat(lines, "\n")
-h.assert_false(joined:find("pending review", 1, true), "hint removed when empty")
+h.assert_false(joined:find("<C-r> preview", 1, true), "hint removed when empty")
 
 pcall(vim.api.nvim_win_close, win, true)
 pcall(vim.api.nvim_win_close, other, true)

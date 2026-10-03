@@ -1,13 +1,15 @@
--- Multi-file review: pending list + BEFORE/AFTER diff + accept/reject
+-- Multi-file review: pending list + BEFORE/AFTER preview (accept/reject via cmds)
 local config = require("pi.config")
 local session = require("pi.session")
 
 local M = {}
 local file_idx = 0
 local list_buf, list_win, before_win, code_win
+local show_list = true
 local mapped = {}
 local hint_ns = vim.api.nvim_create_namespace("pi_review_hint")
 local hint_buf ---@type integer|nil
+local PREVIEW_HINT = " ]f/[f file · ]h/[h hunk · q close "
 
 local function clear_hint()
   if hint_buf and vim.api.nvim_buf_is_valid(hint_buf) then
@@ -46,7 +48,7 @@ local function paint_hint(buf, before_lines)
   if vim.fn.hlexists("PiReview") == 0 then
     vim.api.nvim_set_hl(0, "PiReview", { fg = 0xe0af68, bold = true })
   end
-  local label = " a/r file · A/R all · ah/rh hunk · ]h/[h · q close "
+  local label = PREVIEW_HINT
   local w = vim.fn.strdisplaywidth(label)
   local bar = string.rep("─", w)
   local top = "╭" .. bar .. "╮"
@@ -91,7 +93,7 @@ function M.close(prefer_buf)
 end
 
 --- Queue empty: close review chrome and return to pi chat.
---- Busy → notify wait (auto_show will reopen on new edits); idle → review done.
+--- Busy → notify wait; idle → preview done (touched cleared via :PiAccept etc).
 local function finish_empty(prefer_buf, reason)
   M.close(prefer_buf)
   local busy = session.is_busy()
@@ -107,7 +109,7 @@ local function finish_empty(prefer_buf, reason)
   elseif busy then
     vim.notify("pi: no more diffs · waiting for agent…", vim.log.levels.INFO)
   else
-    vim.notify("pi: review done", vim.log.levels.INFO)
+    vim.notify("pi: preview done", vim.log.levels.INFO)
   end
 end
 
@@ -118,8 +120,8 @@ local function redraw_list()
   local touched = session.touched()
   local lines = {
     "pending (" .. #touched .. ")",
-    "a/r file · A/R all · ah/rh hunk · ]h/[h · q close",
-    "]f/[f next/prev",
+    "]f/[f next/prev · ]h/[h hunk · q close",
+    ":PiAccept / :PiReject if needed",
     "",
   }
   for i, t in ipairs(touched) do
@@ -157,29 +159,12 @@ local function map_keys(bufnr)
   mapped[bufnr] = true
   local k = config.opts.keys
   local opts = { buffer = bufnr, nowait = true, silent = true }
-  vim.keymap.set("n", k.accept, function()
-    M.accept()
-  end, opts)
-  vim.keymap.set("n", k.reject, function()
-    M.reject()
-  end, opts)
-  vim.keymap.set("n", "A", function()
-    M.accept_all()
-  end, opts)
-  vim.keymap.set("n", "R", function()
-    M.reject_all()
-  end, opts)
+  -- Preview-first: no a/r gate. Commands :PiAccept / :PiReject still work.
   vim.keymap.set("n", k.next_file, function()
     M.next(1)
   end, opts)
   vim.keymap.set("n", k.prev_file, function()
     M.next(-1)
-  end, opts)
-  vim.keymap.set("n", "ah", function()
-    M.accept_hunk()
-  end, opts)
-  vim.keymap.set("n", "rh", function()
-    M.reject_hunk()
   end, opts)
   vim.keymap.set("n", "]h", function()
     M.next_hunk(1)
@@ -192,7 +177,13 @@ local function map_keys(bufnr)
   end, opts)
 end
 
-function M.open(idx)
+---@param idx integer|nil
+---@param opts { list?: boolean }|nil
+function M.open(idx, opts)
+  opts = opts or {}
+  if opts.list ~= nil then
+    show_list = opts.list and true or false
+  end
   ensure_list()
   local touched = session.touched()
   if #touched == 0 then
@@ -216,15 +207,20 @@ function M.open(idx)
   end
   vim.api.nvim_set_current_win(code_win)
   vim.api.nvim_win_set_buf(code_win, t.buf)
-  pcall(vim.api.nvim_set_option_value, "winbar", " AFTER " .. t.rel .. " [a]/[r] [A]all ", { win = code_win })
+  pcall(vim.api.nvim_set_option_value, "winbar", " AFTER " .. t.rel .. "  [q] close ", { win = code_win })
 
-  if not list_win or not vim.api.nvim_win_is_valid(list_win) then
-    vim.cmd("topleft 28vsplit")
-    list_win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_buf(list_win, list_buf)
-    vim.api.nvim_set_current_win(code_win)
-  else
-    vim.api.nvim_win_set_buf(list_win, list_buf)
+  if show_list then
+    if not list_win or not vim.api.nvim_win_is_valid(list_win) then
+      vim.cmd("topleft 28vsplit")
+      list_win = vim.api.nvim_get_current_win()
+      vim.api.nvim_win_set_buf(list_win, list_buf)
+      vim.api.nvim_set_current_win(code_win)
+    else
+      vim.api.nvim_win_set_buf(list_win, list_buf)
+    end
+  elseif list_win and vim.api.nvim_win_is_valid(list_win) then
+    pcall(vim.api.nvim_win_close, list_win, true)
+    list_win = nil
   end
 
   local bname = "pi://before/" .. t.rel
@@ -253,11 +249,44 @@ function M.open(idx)
   vim.cmd("diffthis")
   pcall(vim.api.nvim_win_set_cursor, code_win, { t.changed_row or 1, 0 })
 
-  map_keys(list_buf)
+  if show_list then
+    map_keys(list_buf)
+  end
   map_keys(t.buf)
   map_keys(before_buf)
   paint_hint(t.buf, t.before)
-  redraw_list()
+  if show_list then
+    redraw_list()
+  end
+end
+
+--- Preview latest (or indexed) touched file — no pending list sidebar.
+function M.preview(idx)
+  local n = #session.touched()
+  if n == 0 then
+    finish_empty(nil, "none")
+    return
+  end
+  M.open(idx or n, { list = false })
+end
+
+--- Preview all: pending list + first file; cycle with ]f/[f.
+function M.preview_all()
+  M.open(1, { list = true })
+end
+
+--- Silent-write all touched buffers (keep queue for preview).
+function M.write_pending()
+  if not config.opts.write_on_accept then
+    return
+  end
+  for _, t in ipairs(session.touched()) do
+    if t.buf and vim.api.nvim_buf_is_valid(t.buf) and vim.bo[t.buf].buftype == "" then
+      pcall(vim.api.nvim_buf_call, t.buf, function()
+        vim.cmd("silent! write")
+      end)
+    end
+  end
 end
 
 function M.next(delta)
@@ -271,7 +300,7 @@ function M.next(delta)
   elseif i > n then
     i = 1
   end
-  M.open(i)
+  M.open(i, { list = show_list })
 end
 
 function M.accept()
@@ -514,10 +543,8 @@ function M.next_hunk(dir)
 end
 
 function M.auto_show()
-  local n = #session.touched()
-  if n > 0 then
-    M.open(n)
-  end
+  -- Preview-only UX: do not auto-open the review chrome after host edits.
+  -- Chat hint + <C-r>/<C-o> open on demand.
 end
 
 function M.current_index()

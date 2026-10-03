@@ -24,21 +24,48 @@ function M.rep_to_width(ch, width)
 end
 
 --- Hard-wrap a line to `width` display cells.
+--- Prefer the last whitespace in the fit window (word wrap). Fall back to a
+--- character cut only when the token itself is wider than `width` — otherwise
+--- boxed text looks like "do N" / "OT" mid-word breaks.
 function M.wrap_line(text, width, indent)
-  if width < 8 or vim.fn.strdisplaywidth(text) <= width then
+  if width < 8 or M.disp_w(text) <= width then
     return { text }
   end
   local out = {}
   local rest = text
-  while vim.fn.strdisplaywidth(rest) > width do
-    local i = vim.fn.strchars(rest)
-    while i > 1 and vim.fn.strdisplaywidth(vim.fn.strcharpart(rest, 0, i)) > width do
-      i = i - 1
+  local ind = indent or ""
+  while M.disp_w(rest) > width do
+    local nchars = vim.fn.strchars(rest)
+    local fit = nchars
+    while fit > 1 and M.disp_w(vim.fn.strcharpart(rest, 0, fit)) > width do
+      fit = fit - 1
     end
-    out[#out + 1] = vim.fn.strcharpart(rest, 0, i)
-    rest = (indent or "") .. vim.fn.strcharpart(rest, i)
+    -- Last whitespace char index in [0, fit) (0-based).
+    local break_at = fit
+    local sp = fit
+    while sp > 0 do
+      local ch = vim.fn.strcharpart(rest, sp - 1, 1)
+      if ch:match("^%s$") or ch == "　" then
+        break_at = sp - 1
+        break
+      end
+      sp = sp - 1
+    end
+    -- No usable break (single long token) → hard cut at fit.
+    if break_at < 1 then
+      break_at = math.max(1, fit)
+    end
+    local piece = vim.fn.strcharpart(rest, 0, break_at):gsub("%s+$", "")
+    out[#out + 1] = piece
+    rest = vim.fn.strcharpart(rest, break_at):gsub("^%s+", "")
+    if rest == "" then
+      break
+    end
+    rest = ind .. rest
   end
-  out[#out + 1] = rest
+  if rest ~= "" then
+    out[#out + 1] = rest
+  end
   return out
 end
 

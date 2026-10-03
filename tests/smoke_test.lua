@@ -10,6 +10,8 @@ package.loaded["pi.init"] = nil
 
 local config = require("pi.config")
 h.assert_eq(config.opts.keys.accept, "a", "accept key")
+h.assert_eq(config.opts.keys.preview, "<C-r>", "preview key")
+h.assert_eq(config.opts.keys.preview_all, "<C-o>", "preview_all key")
 h.assert_eq(config.opts.write_on_accept, true, "default write_on_accept")
 
 local pi = require("pi")

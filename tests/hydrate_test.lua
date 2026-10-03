@@ -129,7 +129,7 @@ h.assert_truthy(boxes["PiThinkBar"].border == "PiThinkBorder", "thinking border 
 h.assert_truthy(boxes["PiToolBar"].border == "PiToolBorder", "tool border hl")
 
 local saw_dashed, saw_square = false, false
-local label_of = { PiYouBar = "user", PiToolBar = "toolcall", PiThinkBar = "thinking" }
+local label_of = { PiYouBar = "you · #", PiToolBar = "toolcall", PiThinkBar = "thinking" }
 local label_seen = {}
 for _, box in ipairs(h.box_namespaces()) do
   local role, top, top_chunks, bottom
@@ -170,7 +170,8 @@ for _, box in ipairs(h.box_namespaces()) do
     h.assert_truthy(vim.fn.strdisplaywidth(top) <= vim.o.columns, "box fits the screen: " .. top)
     local own = false
     for _, chunk in ipairs(top_chunks) do
-      if chunk[1] == label_of[role] then
+      local want = label_of[role]
+      if chunk[1] == want or (type(chunk[1]) == "string" and chunk[1]:find(want, 1, true)) then
         own = true
         h.assert_truthy(chunk[2] ~= nil, "label chunk has its own hl")
       end

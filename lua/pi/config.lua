@@ -20,6 +20,10 @@ M.opts = {
     abort = "<C-c>",
     accept = "a",
     reject = "r",
+    --- Chat: preview latest touched file (BEFORE/AFTER). No accept/reject gate.
+    preview = "<C-r>",
+    --- Chat: pending-file list + cycle with ]f/[f.
+    preview_all = "<C-o>",
     next_file = "]f",
     prev_file = "[f",
     mention = "@",
@@ -56,6 +60,9 @@ M.opts = {
   busy_submit = "steer", -- "steer" | "followUp" when agent is streaming
   --- stream thinking as gray text (no role labels; OpenCode-style)
   show_thinking = true,
+  --- After thinking_end / successful tool_execution_end, auto-collapse the box
+  --- (expanded while streaming/running). Errors stay open. ftk/ftt still toggle.
+  auto_fold = true,
   --- "auto" = builtins + nvim host tools; "chat" = --no-tools
   mode = "auto",
   -- Soft tool preference (pi has no priority API). Default drops disk
