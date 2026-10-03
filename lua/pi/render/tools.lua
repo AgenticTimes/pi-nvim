@@ -52,8 +52,66 @@ function M.is_buffer_edit(name, args)
   return false
 end
 
---- One-line summary for the top-rule label (nil → keep default "toolcall").
---- Mirrors edit chrome: the frame answers "what happened?"; body is detail.
+--- Preferred arg keys for a one-line chrome summary (first hit wins).
+local SUMMARY_KEYS = {
+  "path",
+  "file",
+  "filename",
+  "command",
+  "pattern",
+  "regexp",
+  "query",
+  "agent",
+  "message",
+  "prompt",
+  "task",
+  "description",
+  "goal",
+  "url",
+  "uri",
+  "id",
+  "name",
+  "label",
+}
+
+--- Pick (key, value) for the top-rule summary. Prefer known keys, else first
+--- short non-table string by sorted key name.
+---@return string|nil, any
+local function pick_summary_arg(args)
+  if type(args) ~= "table" then
+    return nil, nil
+  end
+  for _, k in ipairs(SUMMARY_KEYS) do
+    local v = args[k]
+    if v ~= nil and type(v) ~= "table" and tostring(v) ~= "" then
+      return k, v
+    end
+  end
+  local keys = {}
+  for k, v in pairs(args) do
+    if type(v) ~= "table" and tostring(v) ~= "" then
+      keys[#keys + 1] = k
+    end
+  end
+  table.sort(keys)
+  if keys[1] then
+    return keys[1], args[keys[1]]
+  end
+  return nil, nil
+end
+
+local function one_line(v)
+  local s = tostring(v):match("^[^\n]+") or tostring(v)
+  return (s:gsub("%s+", " "):match("^%s*(.-)%s*$")) or ""
+end
+
+local function pathish(key)
+  return key == "path" or key == "file" or key == "filename"
+end
+
+--- One-line summary for the top-rule label.
+--- nil only for edit/write (those keep path + mini-diff via apply_edit_chrome).
+--- Every other tool always gets a chrome summary — never a bare "toolcall".
 function M.chrome_label(name, args, ok, count)
   if M.is_buffer_edit(name, args) then
     return nil
@@ -71,7 +129,7 @@ function M.chrome_label(name, args, ok, count)
     local label = "subagent · " .. trunc_disp(tostring(agent), 18)
     local task = args.task or args.prompt or args.description or args.goal
     if task and tostring(task) ~= "" then
-      local one = tostring(task):gsub("%s+", " "):match("^%s*(.-)%s*$") or ""
+      local one = one_line(task)
       local room = 42 - vim.fn.strdisplaywidth(label)
       if room > 10 and one ~= "" then
         label = label .. " · " .. trunc_disp(one, room)
@@ -83,9 +141,7 @@ function M.chrome_label(name, args, ok, count)
   if n == "bash" or n == "shell" or n == "run" then
     local cmd = args.command
     if cmd and tostring(cmd) ~= "" then
-      local one = tostring(cmd):match("^[^\n]+") or tostring(cmd)
-      one = one:gsub("^%s+", ""):gsub("%s+$", "")
-      return trunc_disp("$ " .. one, 44) .. suffix
+      return trunc_disp("$ " .. one_line(cmd), 44) .. suffix
     end
   end
 
@@ -108,7 +164,16 @@ function M.chrome_label(name, args, ok, count)
     return trunc_disp(n .. " · " .. p, 40) .. suffix
   end
 
-  return nil
+  -- Universal fallback: {name} · {best arg} (or just {name}).
+  local key, val = pick_summary_arg(args)
+  if not key then
+    return trunc_disp(n, 40) .. suffix
+  end
+  local one = one_line(val)
+  if pathish(key) and vim.fn.strdisplaywidth(one) > 24 then
+    one = vim.fn.fnamemodify(one, ":t")
+  end
+  return trunc_disp(n .. " · " .. one, 44) .. suffix
 end
 
 --- Arg keys already shown on the chrome label — omit from the body.
@@ -146,6 +211,14 @@ function M.chrome_omit_keys(name, args)
       omit.pattern = true
       omit.regexp = true
       omit.query = true
+    end
+  else
+    local key, val = pick_summary_arg(args)
+    if key and val and not tostring(val):find("\n", 1, true) then
+      local one = one_line(val)
+      if vim.fn.strdisplaywidth(one) <= 36 then
+        omit[key] = true
+      end
     end
   end
   return omit

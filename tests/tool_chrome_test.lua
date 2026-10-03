@@ -21,6 +21,20 @@ h.assert_truthy(bash:find("✗", 1, true), "bash fail mark")
 
 h.assert_eq(tools.chrome_label("nvim_replace_in_buffer", { path = "x", old_text = "a", new_text = "b" }, true), nil, "edit skips chrome_label")
 
+-- universal fallback: any non-edit tool gets a chrome summary
+local webfetch = tools.chrome_label("web_fetch", { url = "https://example.com/docs" }, true)
+h.assert_truthy(webfetch:find("web_fetch", 1, true), "generic name: " .. tostring(webfetch))
+h.assert_truthy(webfetch:find("example.com", 1, true), "generic arg: " .. tostring(webfetch))
+h.assert_truthy(webfetch:find("✓", 1, true), "generic mark")
+
+local bare = tools.chrome_label("ping", {}, true)
+h.assert_truthy(bare:find("ping", 1, true), "name-only chrome: " .. tostring(bare))
+
+local fetch_body = tools.tool_block_lines("web_fetch", { url = "https://example.com/docs" }, true, 1, nil, 60)
+local fj = table.concat(fetch_body, "\n")
+h.assert_false(fj:find("url:", 1, true), "omitted url in body: " .. fj)
+h.assert_false(fj:find("⚙ web_fetch", 1, true), "no ⚙ header for generic chrome: " .. fj)
+
 -- body omits agent when chrome has it
 local body = tools.tool_block_lines("subagent", { agent = "worker" }, true, 1, nil, 60)
 local bj = table.concat(body, "\n")
