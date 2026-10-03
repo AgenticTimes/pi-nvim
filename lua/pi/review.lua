@@ -5,8 +5,11 @@ local session = require("pi.session")
 local M = {}
 local file_idx = 0
 local list_buf, list_win, before_win, code_win
+--- Buffer that was in code_win before preview swapped in the AFTER file.
+--- `<C-r>` often runs from the pi chat float — without restore, `q` leaves
+--- that float showing the edited file instead of the agent transcript.
+local code_win_restore_buf ---@type integer|nil
 local show_list = true
-local mapped = {}
 local hint_ns = vim.api.nvim_create_namespace("pi_review_hint")
 local hint_buf ---@type integer|nil
 local PREVIEW_HINT = " ]f/[f file · ]h/[h hunk · q close "
@@ -75,7 +78,8 @@ local function close_diff()
   before_win = nil
 end
 
---- Tear down review chrome (before split + pending list). Keep code_win on prefer_buf when given.
+--- Tear down review chrome (before split + pending list).
+--- Restores code_win to prefer_buf, else the buffer captured when preview opened.
 function M.close(prefer_buf)
   close_diff()
   if list_win and vim.api.nvim_win_is_valid(list_win) then
@@ -83,13 +87,30 @@ function M.close(prefer_buf)
   end
   list_win = nil
   file_idx = 0
+  local restore = prefer_buf
+  if (not restore or not vim.api.nvim_buf_is_valid(restore)) and code_win_restore_buf then
+    restore = code_win_restore_buf
+  end
   if code_win and vim.api.nvim_win_is_valid(code_win) then
     pcall(vim.api.nvim_set_option_value, "winbar", "", { win = code_win })
-    if prefer_buf and vim.api.nvim_buf_is_valid(prefer_buf) then
-      pcall(vim.api.nvim_win_set_buf, code_win, prefer_buf)
+    if restore and vim.api.nvim_buf_is_valid(restore) then
+      pcall(vim.api.nvim_win_set_buf, code_win, restore)
       pcall(vim.api.nvim_set_current_win, code_win)
     end
   end
+  code_win_restore_buf = nil
+end
+
+--- User pressed `q`: leave preview and return focus to the pi chat UI.
+function M.quit()
+  M.close()
+  pcall(function()
+    local ui = require("pi.ui")
+    if not ui.is_open() then
+      ui.open()
+    end
+    ui.focus_chat()
+  end)
 end
 
 --- Queue empty: close review chrome and return to pi chat.
@@ -153,28 +174,39 @@ local function ensure_list()
 end
 
 local function map_keys(bufnr)
-  if not bufnr or mapped[bufnr] or not vim.api.nvim_buf_is_valid(bufnr) then
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
     return
   end
-  mapped[bufnr] = true
   local k = config.opts.keys
-  local opts = { buffer = bufnr, nowait = true, silent = true }
+  local opts = { buffer = bufnr, nowait = true, silent = true, noremap = true }
+  -- Always rebind: a one-shot `mapped[]` cache skipped reinstall after other
+  -- plugins (or diffoff) cleared buffer maps, so ]f fell through to gf/find
+  -- and tried to open the current line as a path (E447).
+  for _, lhs in ipairs({
+    k.next_file or "]f",
+    k.prev_file or "[f",
+    "]h",
+    "[h",
+    "q",
+  }) do
+    pcall(vim.keymap.del, "n", lhs, { buffer = bufnr })
+  end
   -- Preview-first: no a/r gate. Commands :PiAccept / :PiReject still work.
-  vim.keymap.set("n", k.next_file, function()
+  vim.keymap.set("n", k.next_file or "]f", function()
     M.next(1)
-  end, opts)
-  vim.keymap.set("n", k.prev_file, function()
+  end, vim.tbl_extend("force", opts, { desc = "pi: next pending file" }))
+  vim.keymap.set("n", k.prev_file or "[f", function()
     M.next(-1)
-  end, opts)
+  end, vim.tbl_extend("force", opts, { desc = "pi: prev pending file" }))
   vim.keymap.set("n", "]h", function()
     M.next_hunk(1)
-  end, opts)
+  end, vim.tbl_extend("force", opts, { desc = "pi: next hunk" }))
   vim.keymap.set("n", "[h", function()
     M.next_hunk(-1)
-  end, opts)
+  end, vim.tbl_extend("force", opts, { desc = "pi: prev hunk" }))
   vim.keymap.set("n", "q", function()
-    M.close()
-  end, opts)
+    M.quit()
+  end, vim.tbl_extend("force", opts, { desc = "pi: close preview" }))
 end
 
 ---@param idx integer|nil
@@ -201,9 +233,16 @@ function M.open(idx, opts)
   local t = touched[idx]
   close_diff()
 
-  -- ensure we have a code window: use current or create tab-ish split
+  -- ensure we have a code window: use current (often the pi chat float)
   if not code_win or not vim.api.nvim_win_is_valid(code_win) then
     code_win = vim.api.nvim_get_current_win()
+    code_win_restore_buf = vim.api.nvim_win_get_buf(code_win)
+  elseif not code_win_restore_buf then
+    -- Re-entered while chrome still up: keep whatever was there before AFTER.
+    local cur = vim.api.nvim_win_get_buf(code_win)
+    if cur ~= t.buf then
+      code_win_restore_buf = cur
+    end
   end
   vim.api.nvim_set_current_win(code_win)
   vim.api.nvim_win_set_buf(code_win, t.buf)
@@ -292,6 +331,11 @@ end
 function M.next(delta)
   local n = #session.touched()
   if n == 0 then
+    vim.notify("pi: no pending files", vim.log.levels.INFO)
+    return
+  end
+  if n == 1 then
+    vim.notify("pi: only 1 pending file", vim.log.levels.INFO)
     return
   end
   local i = file_idx + (delta or 1)

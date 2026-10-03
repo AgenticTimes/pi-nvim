@@ -98,9 +98,16 @@ local function paint_overlay(text)
     vim.bo[overlay_buf].bufhidden = "wipe"
     vim.bo[overlay_buf].modifiable = true
   end
-  vim.bo[overlay_buf].modifiable = true
-  vim.api.nvim_buf_set_lines(overlay_buf, 0, -1, false, { "  " .. text })
-  vim.bo[overlay_buf].modifiable = false
+  local line = "  " .. text
+  local cur_line = ""
+  if vim.api.nvim_buf_line_count(overlay_buf) >= 1 then
+    cur_line = vim.api.nvim_buf_get_lines(overlay_buf, 0, 1, false)[1] or ""
+  end
+  if cur_line ~= line then
+    vim.bo[overlay_buf].modifiable = true
+    vim.api.nvim_buf_set_lines(overlay_buf, 0, -1, false, { line })
+    vim.bo[overlay_buf].modifiable = false
+  end
 
   local cfg = vim.api.nvim_win_get_config(chat_win)
   local width = cfg.width or vim.api.nvim_win_get_width(chat_win)
@@ -119,7 +126,17 @@ local function paint_overlay(text)
     zindex = (cfg.zindex or 50) + 5,
   }
   if overlay_win and vim.api.nvim_win_is_valid(overlay_win) then
-    pcall(vim.api.nvim_win_set_config, overlay_win, opts)
+    -- Reconfig only when geometry drifted — set_config every 100ms shakes the float.
+    local cur = vim.api.nvim_win_get_config(overlay_win)
+    local same = cur.relative == "win"
+      and cur.win == chat_win
+      and cur.width == opts.width
+      and cur.height == opts.height
+      and cur.row == opts.row
+      and cur.col == opts.col
+    if not same then
+      pcall(vim.api.nvim_win_set_config, overlay_win, opts)
+    end
   else
     overlay_win = vim.api.nvim_open_win(overlay_buf, false, opts)
   end
@@ -128,14 +145,15 @@ local function paint_overlay(text)
   end)
 end
 
+--- Set winbar only when the string changes. Clearing then re-setting every
+--- spinner tick grows/shrinks the content area by one row → vertical jitter.
 local function paint_chat_winbar(text, busy)
-  clear_pi_winbars()
-  if text == "" then
-    return
-  end
   ensure_hl()
-  local hl = busy and "PiBusy" or "PiReview"
-  local value = "%#" .. hl .. "#" .. text .. "%*"
+  local value = ""
+  if text ~= "" then
+    local hl = busy and "PiBusy" or "PiReview"
+    value = "%#" .. hl .. "#" .. text .. "%*"
+  end
   local targets
   if busy then
     targets = busy_target_wins()
@@ -149,11 +167,34 @@ local function paint_chat_winbar(text, busy)
       end
     end)
   end
+  local want = {}
   for _, win in ipairs(targets) do
+    want[win] = true
     if vim.api.nvim_win_is_valid(win) then
-      pcall(vim.api.nvim_set_option_value, "winbar", value, { scope = "local", win = win })
+      local cur = vim.api.nvim_get_option_value("winbar", { scope = "local", win = win })
+      if cur ~= value then
+        pcall(vim.api.nvim_set_option_value, "winbar", value, { scope = "local", win = win })
+      end
     end
   end
+  -- Drop stale winbars on other pi wins (only when they still have one).
+  local function clear_if_stale(win)
+    if not win or want[win] or not vim.api.nvim_win_is_valid(win) then
+      return
+    end
+    local cur = vim.api.nvim_get_option_value("winbar", { scope = "local", win = win })
+    if cur ~= "" then
+      pcall(vim.api.nvim_set_option_value, "winbar", "", { scope = "local", win = win })
+    end
+  end
+  pcall(function()
+    for _, win in ipairs(require("pi.slots").all_wins()) do
+      clear_if_stale(win)
+    end
+  end)
+  pcall(function()
+    clear_if_stale(require("pi.ui").chat_win())
+  end)
 end
 
 local function refresh()
@@ -176,7 +217,9 @@ local function refresh()
     return
   end
   if started_at then
-    paint_chat_winbar(text, true)
+    -- Busy: overlay only. Winbar + spinner-tick clear/set used to yank the
+    -- chat content area by one row every 100ms (submit → wait jitter).
+    paint_chat_winbar("", true)
     paint_overlay(text)
   else
     -- idle: show pending Review in winbar; never keep the Working overlay

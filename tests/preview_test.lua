@@ -34,9 +34,16 @@ h.assert_eq(#session.touched(), 2, "two touched")
 review.auto_show()
 h.assert_eq(review.current_index(), 0, "auto_show leaves idx unset")
 
+-- Simulate chat float: current win holds a chat-like buffer, then preview swaps it.
+local chat = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(chat, 0, -1, false, { "# pi chat", "hello" })
+local win = vim.api.nvim_get_current_win()
+vim.api.nvim_win_set_buf(win, chat)
+
 -- preview opens latest file (no pending list required)
 review.preview()
 h.assert_eq(review.current_index(), 2, "preview last file")
+h.assert_eq(vim.api.nvim_win_get_buf(win), b2, "preview shows AFTER file in win")
 local found_hint = false
 for name, id in pairs(vim.api.nvim_get_namespaces()) do
   if name == "pi_review_hint" then
@@ -62,17 +69,26 @@ h.assert_truthy(found_hint, "preview paints hint")
 -- preview_all opens first + list mode; next cycles
 review.preview_all()
 h.assert_eq(review.current_index(), 1, "preview_all first")
+-- ]f must be buffer-local to AFTER (not fall through to gf / :find)
+local map_f = vim.fn.maparg("]f", "n", false, true)
+h.assert_truthy(map_f and map_f.buffer == 1, "]f is buffer-local")
+h.assert_truthy(map_f.desc and map_f.desc:find("pending file", 1, true), "]f desc: " .. tostring(map_f.desc))
 review.next(1)
 h.assert_eq(review.current_index(), 2, "next file")
 
--- q / close keeps touched (preview-only)
-review.close()
+-- q / close keeps touched and restores the pre-preview (chat) buffer
+review.quit()
 h.assert_eq(#session.touched(), 2, "touched kept after close")
+h.assert_eq(vim.api.nvim_win_get_buf(win), chat, "quit restores chat buffer in win")
 
 -- accept still works via API
 review.open(1, { list = true })
 review.accept()
 h.assert_eq(#session.touched(), 1, "accept removes one")
+-- single pending file: ]f is a no-op (does not gf the current line)
+local idx_before = review.current_index()
+review.next(1)
+h.assert_eq(review.current_index(), idx_before, "next with 1 file stays")
 
 require("pi.ui").close()
 require("pi.config").opts.write_on_accept = true

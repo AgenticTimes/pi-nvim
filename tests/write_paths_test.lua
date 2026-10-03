@@ -72,4 +72,37 @@ h.assert_truthy(top:find("_wp_bash", 1, true), "chrome path: " .. top)
 h.assert_truthy(top:find("<C-r> full diff", 1, true), "chrome C-r: " .. top)
 
 pcall(vim.fn.delete, target)
+
+-- Race: tool_start after write already finished (common for fast bash create).
+-- before==after on disk; untracked truncate → before={} → all + lines.
+session.reset()
+local raced = h.root .. "/demo/_wp_race.md"
+pcall(vim.fn.delete, raced)
+vim.fn.writefile({ "# RACE", "line2" }, raced)
+local chat2 = vim.api.nvim_create_buf(false, true)
+render.setup(chat2)
+render.reset(chat2)
+local cmd2 = string.format("cat > %s <<'EOF'\n# RACE\nline2\nEOF", raced)
+render.on_event(chat2, {
+  type = "tool_execution_start",
+  toolCallId = "b2",
+  toolName = "bash",
+  args = { command = cmd2 },
+})
+-- no second write — file already has final contents (late start)
+render.on_event(chat2, {
+  type = "tool_execution_end",
+  toolCallId = "b2",
+  toolName = "bash",
+  isError = false,
+})
+local mid2 = table.concat(vim.api.nvim_buf_get_lines(chat2, 0, -1, false), "\n")
+h.assert_truthy(mid2:find("+ # RACE", 1, true) or mid2:find("%+ # RACE"), "race create plus: " .. mid2)
+h.assert_false(mid2:find("cat >", 1, true), "race hides command: " .. mid2)
+pcall(vim.fn.delete, raced)
+
+-- unit: truncate detect + resolve_changed empty-before
+h.assert_truthy(W.command_truncates("cat > /tmp/x <<'EOF'\nhi\nEOF"), "cat > truncates")
+h.assert_false(W.command_truncates("echo hi >> /tmp/x"), ">> does not truncate alone")
+
 print("OK write_paths_test")

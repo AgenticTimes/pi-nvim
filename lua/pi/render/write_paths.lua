@@ -177,4 +177,90 @@ function M.first_changed(snapshots)
   return nil
 end
 
+--- True when the bash command truncates (overwrite/create), not append-only.
+function M.command_truncates(command)
+  command = tostring(command or "")
+  if command == "" then
+    return false
+  end
+  -- cat > path (not >>)
+  if command:match("cat%s+>[^>]") then
+    return true
+  end
+  -- tee path without -a
+  if command:match("tee%s+") and not command:match("tee%s+%-a") then
+    return true
+  end
+  -- bare > redirect (not >>): char before > is not another >
+  if command:match("[^>]>[^>&]") or command:match("^[>][^>&]") or command:match("%s>[^>&]") then
+    return true
+  end
+  return false
+end
+
+--- HEAD contents for path, or nil if untracked / not a git repo.
+function M.git_before_lines(path)
+  local abs = M.norm(path)
+  if not abs then
+    return nil
+  end
+  local rel = vim.fn.fnamemodify(abs, ":.")
+  if rel == "" or rel:match("^/") then
+    return nil
+  end
+  local out = vim.fn.systemlist({ "git", "show", "HEAD:" .. rel })
+  if vim.v.shell_error ~= 0 then
+    return nil
+  end
+  return out
+end
+
+--- Disk before→after, or recover when tool_start raced past the write
+--- (before==after): prefer git HEAD, else empty before for truncate creates.
+---@return { path: string, rel: string, before: string[], after: string[] }|nil
+function M.resolve_changed(snapshots, name, args)
+  local hit = M.first_changed(snapshots)
+  if hit then
+    return hit
+  end
+  local n = tostring(name or ""):gsub("^nvim_", ""):lower()
+  local trunc = false
+  if n == "bash" or n == "shell" or n == "run" then
+    trunc = M.command_truncates(args and args.command)
+  elseif n:find("write", 1, true) or n == "edit" then
+    trunc = true
+  end
+  for _, s in ipairs(snapshots or {}) do
+    local after = M.read_lines(s.path)
+    local before = s.before or {}
+    if not lines_equal(before, after) then
+      return {
+        path = s.path,
+        rel = s.rel or M.rel(s.path) or s.path,
+        before = before,
+        after = after,
+      }
+    end
+    local git_before = M.git_before_lines(s.path)
+    if git_before and not lines_equal(git_before, after) then
+      return {
+        path = s.path,
+        rel = s.rel or M.rel(s.path) or s.path,
+        before = git_before,
+        after = after,
+      }
+    end
+    if trunc and #after > 0 and git_before == nil then
+      -- Late start after create: untracked file already has new contents.
+      return {
+        path = s.path,
+        rel = s.rel or M.rel(s.path) or s.path,
+        before = {},
+        after = after,
+      }
+    end
+  end
+  return nil
+end
+
 return M

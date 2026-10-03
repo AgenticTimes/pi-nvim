@@ -28,6 +28,9 @@ Skip `/dev/null`, fd redirects (`>&2`), variables (`$foo`).
 - `tool_end` success + content changed → mini-diff body + chrome; also `record_edit` so `<C-r>` works.
 - Multiple files → first changed only.
 - No parseable path / no change → keep normal tool block.
+- **Race:** if `tool_start` arrives after the write (`before == after`), recover
+  `before` from `git show HEAD:path`; if untracked and the command truncates
+  (`>`, `cat >`, `tee`), treat `before` as `{}` so new files still show `+/-`.
 
 ## Non-goals
 

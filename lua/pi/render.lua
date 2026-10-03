@@ -1594,7 +1594,13 @@ local function maybe_edit_diff_full(full, name, args, ok, has_err, meta)
   end
 
   -- Disk writes (bash >, write tool, …): compare tool_start snapshot → now.
-  local changed = Wpaths.first_changed(meta and meta.snapshots)
+  -- If start was missed or raced after the write, snapshot now and recover
+  -- before via git / empty (truncate create).
+  local snaps = meta and meta.snapshots
+  if not snaps or #snaps == 0 then
+    snaps = Wpaths.snapshot_writes(name, args)
+  end
+  local changed = Wpaths.resolve_changed(snaps, name, args)
   if not changed then
     return full, nil
   end
