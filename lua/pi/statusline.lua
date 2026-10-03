@@ -208,8 +208,13 @@ local function refresh()
     multi = require("pi.slots").count() > 1
   end)
   if multi then
-    clear_pi_winbars()
+    -- Do not clear_pi_winbars / close_overlay every 100ms — that fought the
+    -- UI and made Working look frozen when redraw fell behind. Animate the
+    -- busy glyph on slot titles; lualine still mirrors M.text().
     close_overlay()
+    pcall(function()
+      require("pi.slots").refresh_titles()
+    end)
     pcall(function()
       require("lualine").refresh({ place = { "statusline" } })
     end)
@@ -247,6 +252,14 @@ function M.text()
   return ""
 end
 
+--- Current spinner glyph while busy (for multi-slot titles); nil when idle.
+function M.frame_glyph()
+  if not started_at then
+    return nil
+  end
+  return FRAMES[frame]
+end
+
 function M.lualine()
   return M.text()
 end
@@ -272,7 +285,8 @@ function M.start(label)
       return
     end
     frame = frame % #FRAMES + 1
-    refresh()
+    -- Never let a paint error kill the tick loop (frozen "Working · Ns").
+    pcall(refresh)
   end))
   refresh()
 end

@@ -613,7 +613,13 @@ end
 ---@param max_w integer|nil
 function M.format_title(slot, max_w)
   local busy = slot.status == "busy" or slot.status == "streaming"
-  local dot = busy and "●" or "○"
+  local spin
+  if busy then
+    pcall(function()
+      spin = require("pi.statusline").frame_glyph()
+    end)
+  end
+  local dot = busy and (spin or "●") or "○"
   local parts = { string.format("%s #%d", dot, slot.id) }
   if slot.is_viewer or slot.kind == "subagent" then
     parts[1] = string.format("%s #%d◇", dot, slot.id)

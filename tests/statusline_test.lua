@@ -68,6 +68,11 @@ end
 h.assert_false(still, "overlay closed on stop")
 ui.close()
 
+statusline.start()
+h.assert_truthy(statusline.frame_glyph(), "busy frame_glyph")
+statusline.stop()
+h.assert_eq(statusline.frame_glyph(), nil, "idle frame_glyph nil")
+
 package.loaded["pi.session"] = nil
 local session = require("pi.session")
 session.reset()
