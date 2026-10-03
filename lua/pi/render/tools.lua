@@ -33,6 +33,124 @@ local function trunc_disp(s, cols)
   return vim.fn.strcharpart(s, 0, math.max(1, cols - 1)) .. "…"
 end
 
+local function status_mark(ok)
+  if ok == nil then
+    return "…"
+  end
+  return ok and "✓" or "✗"
+end
+
+--- Host buffer edit tools that have a before/after snapshot in session.touched.
+function M.is_buffer_edit(name, args)
+  local n = M.short_name(name):lower()
+  if n:find("replace", 1, true) or n:find("write", 1, true) or n == "edit" then
+    return true
+  end
+  if type(args) == "table" and (args.old_text ~= nil or args.new_text ~= nil) and args.path then
+    return true
+  end
+  return false
+end
+
+--- One-line summary for the top-rule label (nil → keep default "toolcall").
+--- Mirrors edit chrome: the frame answers "what happened?"; body is detail.
+function M.chrome_label(name, args, ok, count)
+  if M.is_buffer_edit(name, args) then
+    return nil
+  end
+  local n = M.short_name(name):lower()
+  args = type(args) == "table" and args or {}
+  local mark = status_mark(ok)
+  local suffix = " " .. mark
+  if count and count > 1 then
+    suffix = suffix .. string.format(" ×%d", count)
+  end
+
+  if n:find("subagent", 1, true) then
+    local agent = args.agent or args.name or args.label or "worker"
+    local label = "subagent · " .. trunc_disp(tostring(agent), 18)
+    local task = args.task or args.prompt or args.description or args.goal
+    if task and tostring(task) ~= "" then
+      local one = tostring(task):gsub("%s+", " "):match("^%s*(.-)%s*$") or ""
+      local room = 42 - vim.fn.strdisplaywidth(label)
+      if room > 10 and one ~= "" then
+        label = label .. " · " .. trunc_disp(one, room)
+      end
+    end
+    return label .. suffix
+  end
+
+  if n == "bash" or n == "shell" or n == "run" then
+    local cmd = args.command
+    if cmd and tostring(cmd) ~= "" then
+      local one = tostring(cmd):match("^[^\n]+") or tostring(cmd)
+      one = one:gsub("^%s+", ""):gsub("%s+$", "")
+      return trunc_disp("$ " .. one, 44) .. suffix
+    end
+  end
+
+  if args.path
+    and (
+      n:find("read", 1, true)
+      or n:find("grep", 1, true)
+      or n:find("glob", 1, true)
+      or n:find("search", 1, true)
+    )
+  then
+    local p = tostring(args.path)
+    if vim.fn.strdisplaywidth(p) > 24 then
+      p = vim.fn.fnamemodify(p, ":t")
+    end
+    local extra = args.pattern or args.regexp or args.query
+    if extra and tostring(extra) ~= "" then
+      return trunc_disp(p .. " · " .. tostring(extra), 40) .. suffix
+    end
+    return trunc_disp(n .. " · " .. p, 40) .. suffix
+  end
+
+  return nil
+end
+
+--- Arg keys already shown on the chrome label — omit from the body.
+function M.chrome_omit_keys(name, args)
+  local n = M.short_name(name):lower()
+  args = type(args) == "table" and args or {}
+  local omit = {}
+  if n:find("subagent", 1, true) then
+    omit.agent = true
+    omit.name = true
+    omit.label = true
+    local task = args.task or args.prompt or args.description or args.goal
+    if task and vim.fn.strdisplaywidth(tostring(task):gsub("%s+", " ")) <= 24 then
+      omit.task = true
+      omit.prompt = true
+      omit.description = true
+      omit.goal = true
+    end
+  elseif n == "bash" or n == "shell" or n == "run" then
+    -- One-line commands live entirely on chrome; multi-line keep body for expand.
+    local cmd = args.command
+    if cmd and not tostring(cmd):find("\n", 1, true) then
+      omit.command = true
+    end
+  elseif args.path
+    and (
+      n:find("read", 1, true)
+      or n:find("grep", 1, true)
+      or n:find("glob", 1, true)
+      or n:find("search", 1, true)
+    )
+  then
+    omit.path = true
+    if args.pattern or args.regexp or args.query then
+      omit.pattern = true
+      omit.regexp = true
+      omit.query = true
+    end
+  end
+  return omit
+end
+
 --- Collapsed tool box: header + one preview arg line + fold marker.
 --- Preview keeps the command/path visible so a folded `bash ✓` still answers
 --- "what did it do?" without expanding.
@@ -54,6 +172,21 @@ function M.collapse_tool_lines(full, expanded, has_err)
   if has_diff then
     return full
   end
+  -- Chrome-summary tools: spacer-only body folds to a single blank row.
+  if full[1] == "" and not has_err then
+    if #full == 1 then
+      return { "" }
+    end
+    local preview = trunc_disp(full[2], 72)
+    local hidden = #full - 2
+    if hidden <= 0 then
+      return { preview }
+    end
+    return {
+      preview,
+      string.format("  … +%d lines  ftt to expand", hidden),
+    }
+  end
   local header = trunc_disp(full[1], 64)
   if #full == 1 then
     if header == full[1] then
@@ -71,18 +204,6 @@ function M.collapse_tool_lines(full, expanded, has_err)
     preview,
     string.format("  … +%d lines  ftt to expand", hidden),
   }
-end
-
---- Host buffer edit tools that have a before/after snapshot in session.touched.
-function M.is_buffer_edit(name, args)
-  local n = M.short_name(name):lower()
-  if n:find("replace", 1, true) or n:find("write", 1, true) or n == "edit" then
-    return true
-  end
-  if type(args) == "table" and (args.old_text ~= nil or args.new_text ~= nil) and args.path then
-    return true
-  end
-  return false
 end
 
 --- First differing hunk as Cursor-style truncated +/- lines (already indented).
@@ -181,11 +302,13 @@ function M.collapse_thinking_lines(full, expanded)
 end
 
 --- The arguments a tool was actually called with.
-function M.tool_arg_lines(args)
+---@param omit table|nil set of keys to skip (already on chrome)
+function M.tool_arg_lines(args, omit)
   local out = {}
   if type(args) ~= "table" then
     return out
   end
+  omit = omit or {}
   local function push(prefix, value)
     local parts = vim.split(clip(tostring(value)), "\n", { plain = true })
     out[#out + 1] = prefix .. parts[1]
@@ -193,12 +316,12 @@ function M.tool_arg_lines(args)
       out[#out + 1] = "  " .. parts[i]
     end
   end
-  if args.command ~= nil then
+  if args.command ~= nil and not omit.command then
     push("$ ", args.command)
   end
   local keys = {}
   for k in pairs(args) do
-    if k ~= "command" then
+    if k ~= "command" and not omit[k] then
       keys[#keys + 1] = k
     end
   end
@@ -217,26 +340,48 @@ end
 
 --- One tool call as full lines (caller collapses for display).
 --- `wrap_width` is the max display width for each line.
+--- When chrome_label applies, body skips the ⚙ header and omitted keys.
 function M.tool_block_lines(name, args, ok, count, err, wrap_width)
-  local mark = ok == nil and "…" or (ok and "✓" or "✗")
-  local head = string.format("⚙ %s %s", M.short_name(name), mark)
-  if count and count > 1 then
-    head = head .. string.format(" ×%d", count)
-  end
-  local raw = { head }
-  for _, l in ipairs(M.tool_arg_lines(args)) do
-    raw[#raw + 1] = "  " .. l
-  end
-  if err and err ~= "" then
-    for _, l in ipairs(text.cap_lines(vim.split(err, "\n", { plain = true }), 6)) do
-      raw[#raw + 1] = "  ! " .. l
+  local chrome = M.chrome_label(name, args, ok, count)
+  local raw = {}
+  if chrome then
+    local omit = M.chrome_omit_keys(name, args)
+    for _, l in ipairs(M.tool_arg_lines(args, omit)) do
+      raw[#raw + 1] = "  " .. l
+    end
+    if err and err ~= "" then
+      for _, l in ipairs(text.cap_lines(vim.split(err, "\n", { plain = true }), 6)) do
+        raw[#raw + 1] = "  ! " .. l
+      end
+    end
+    if #raw == 0 then
+      raw[1] = ""
+    end
+  else
+    local mark = status_mark(ok)
+    local head = string.format("⚙ %s %s", M.short_name(name), mark)
+    if count and count > 1 then
+      head = head .. string.format(" ×%d", count)
+    end
+    raw[1] = head
+    for _, l in ipairs(M.tool_arg_lines(args)) do
+      raw[#raw + 1] = "  " .. l
+    end
+    if err and err ~= "" then
+      for _, l in ipairs(text.cap_lines(vim.split(err, "\n", { plain = true }), 6)) do
+        raw[#raw + 1] = "  ! " .. l
+      end
     end
   end
   local width = math.max(20, wrap_width or 40)
   local lines = {}
   for _, l in ipairs(raw) do
-    for _, w in ipairs(text.wrap_line(l, width, "  ")) do
-      lines[#lines + 1] = w
+    if l == "" then
+      lines[#lines + 1] = ""
+    else
+      for _, w in ipairs(text.wrap_line(l, width, "  ")) do
+        lines[#lines + 1] = w
+      end
     end
   end
   return text.cap_lines(lines, M.FULL_CAP)

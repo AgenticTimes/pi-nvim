@@ -1501,6 +1501,66 @@ local function remove_live_tool_lines(buf, start_line, n)
   end
 end
 
+--- Put a one-line tool summary in the top-rule label (bash / subagent / read…).
+local function apply_tool_chrome(buf, name, args, ok, count)
+  local label = Rtools.chrome_label(name, args, ok, count)
+  if not label or label == "" then
+    return
+  end
+  local b = tool_box and tool_box.buf == buf and tool_box.box or nil
+  if not b then
+    local list = bubbles[buf] or {}
+    for i = #list, 1, -1 do
+      local cand = list[i]
+      if cand.style and cand.style.bar_hl == "PiToolBar" and not cand.edit_review then
+        b = cand
+        break
+      end
+    end
+  end
+  if not b or b.edit_review then
+    return
+  end
+  local s = vim.tbl_extend("force", {}, b.style or STYLES.tool)
+  if vim.fn.strdisplaywidth(label) > 48 then
+    label = vim.fn.strcharpart(label, 0, 47) .. "…"
+  end
+  s.label = label
+  b.style = s
+  b.chrome_summary = true
+  paint_box(b)
+end
+
+--- Put filename in the top-rule label and mark box for <C-r> hint.
+local function apply_edit_chrome(buf, rel)
+  if not rel or rel == "" then
+    return
+  end
+  local b = tool_box and tool_box.buf == buf and tool_box.box or nil
+  if not b then
+    local list = bubbles[buf] or {}
+    for i = #list, 1, -1 do
+      local cand = list[i]
+      if cand.style and cand.style.bar_hl == "PiToolBar" then
+        b = cand
+        break
+      end
+    end
+  end
+  if not b then
+    return
+  end
+  b.edit_review = true
+  local s = vim.tbl_extend("force", {}, b.style or STYLES.tool)
+  local label = tostring(rel)
+  if vim.fn.strdisplaywidth(label) > 28 then
+    label = vim.fn.fnamemodify(label, ":t")
+  end
+  s.label = label
+  b.style = s
+  paint_box(b)
+end
+
 --- While a tool runs: expanded box with "…" mark (OpenCode-style live).
 local function paint_tool_start(buf, id, name, args)
   close_thinking_box()
@@ -1522,6 +1582,7 @@ local function paint_tool_start(buf, id, name, args)
   meta.n = #full
   meta.live = true
   pending[id] = meta
+  apply_tool_chrome(buf, name, args, nil)
   -- append_tool_lines already schedule_follow once
 end
 
@@ -1632,37 +1693,6 @@ local function maybe_edit_diff_full(full, name, args, ok, has_err, meta)
   return edit_diff_lines(changed.rel, changed.before, changed.after), changed.rel
 end
 
---- Put filename in the top-rule label and mark box for <C-r> hint.
-local function apply_edit_chrome(buf, rel)
-  if not rel or rel == "" then
-    return
-  end
-  local b = tool_box and tool_box.buf == buf and tool_box.box or nil
-  if not b then
-    local list = bubbles[buf] or {}
-    for i = #list, 1, -1 do
-      local cand = list[i]
-      if cand.style and cand.style.bar_hl == "PiToolBar" then
-        b = cand
-        break
-      end
-    end
-  end
-  if not b then
-    return
-  end
-  b.edit_review = true
-  local s = vim.tbl_extend("force", {}, b.style or STYLES.tool)
-  -- Short path in the frame (basename if long)
-  local label = tostring(rel)
-  if vim.fn.strdisplaywidth(label) > 28 then
-    label = vim.fn.fnamemodify(label, ":t")
-  end
-  s.label = label
-  b.style = s
-  paint_box(b)
-end
-
 --- Collapse finished successful tool / thinking boxes. Deferred to agent_end so
 --- a turn does not expand→fold mid-stream (thinking_end used to yank topline).
 local function auto_collapse_tools(buf)
@@ -1697,7 +1727,12 @@ local function upsert_tool_end(buf, name, args, ok, err, meta)
   local full = tool_block(buf, name, args, ok, 1, err)
   local edit_rel
   full, edit_rel = maybe_edit_diff_full(full, name, args, ok, has_err, meta)
-  local key = table.concat(full, "\n")
+  -- Include chrome identity so blank chrome-bodies (bash/subagent) do not
+  -- falsely ×N-merge across different tools. Omit count/mark from the key so
+  -- ×2 / ×3 still match the next identical call.
+  local chrome = Rtools.chrome_label(name, args, true) or ("⚙:" .. Rtools.short_name(name))
+  chrome = chrome:gsub(" ✓$", ""):gsub(" ✗$", ""):gsub(" …$", "")
+  local key = chrome .. "\0" .. table.concat(full, "\n")
   -- Keep expanded through the turn; only errors must stay open forever.
   -- auto_fold collapses successes once on agent_end.
   local want_expanded = true
@@ -1743,6 +1778,9 @@ local function upsert_tool_end(buf, name, args, ok, err, meta)
       note_tool_lines(buf, last_tool.start_line, last_tool.start_line + new_n - 1)
       attach_tool_payload(buf, full, expanded, false)
       apply_edit_chrome(buf, edit_rel)
+      if not edit_rel then
+        apply_tool_chrome(buf, name, args, ok, last_tool.count)
+      end
       shift_after_tool_rewrite(buf, last_tool.start_line - 1 + prev_n, last_tool.start_line - 1, new_n, delta)
       prune_tool_boxes(buf)
       schedule_follow(buf)
@@ -1769,6 +1807,9 @@ local function upsert_tool_end(buf, name, args, ok, err, meta)
     }
     attach_tool_payload(buf, full, want_expanded, has_err)
     apply_edit_chrome(buf, edit_rel)
+    if not edit_rel then
+      apply_tool_chrome(buf, name, args, ok)
+    end
     if has_err then
       mark_error_lines(buf, start_line, new_n)
     end
@@ -1790,6 +1831,9 @@ local function upsert_tool_end(buf, name, args, ok, err, meta)
   }
   attach_tool_payload(buf, full, want_expanded, has_err)
   apply_edit_chrome(buf, edit_rel)
+  if not edit_rel then
+    apply_tool_chrome(buf, name, args, ok)
+  end
   if has_err then
     mark_error_lines(buf, first, #display)
   end
