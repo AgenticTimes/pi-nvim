@@ -16,7 +16,7 @@ Folded tool bubbles answer “what happened?” from the **top rule alone**. Nev
 | `read` / `grep` / path tools | basename / pattern | omit path/pattern |
 | **any other non-edit tool** | `{short_name} · {best arg}` + mark | omit that arg when short |
 | no useful args | `{short_name}` + mark | spacer |
-| edit / write | path + `<C-r>` hint | **mini-diff preview only** |
+| edit / write / bash disk write | `write|edit · {path}` + mark + `<C-r>` hint | **mini-diff preview only** |
 
 ### Generic arg pick order
 

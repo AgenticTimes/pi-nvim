@@ -52,6 +52,36 @@ function M.is_buffer_edit(name, args)
   return false
 end
 
+--- Verb for content-changing chrome: write (create/overwrite) vs edit (replace).
+function M.edit_verb(name, args)
+  local n = M.short_name(name):lower()
+  if n:find("write", 1, true) then
+    return "write"
+  end
+  if n == "bash" or n == "shell" or n == "run" then
+    return "write"
+  end
+  if n:find("replace", 1, true) or n == "edit" then
+    return "edit"
+  end
+  if type(args) == "table" and (args.old_text ~= nil or args.new_text ~= nil) then
+    return "edit"
+  end
+  return "edit"
+end
+
+--- Path shown on edit/write chrome (basename when long).
+function M.edit_path_label(rel)
+  local path = tostring(rel or "")
+  if path == "" then
+    return ""
+  end
+  if vim.fn.strdisplaywidth(path) > 22 then
+    path = vim.fn.fnamemodify(path, ":t")
+  end
+  return path
+end
+
 --- Preferred arg keys for a one-line chrome summary (first hit wins).
 local SUMMARY_KEYS = {
   "path",
@@ -110,18 +140,24 @@ local function pathish(key)
 end
 
 --- One-line summary for the top-rule label.
---- nil only for edit/write (those keep path + mini-diff via apply_edit_chrome).
+--- Edit/write use "write|edit · path" (body is mini-diff via apply_edit_chrome).
 --- Every other tool always gets a chrome summary — never a bare "toolcall".
 function M.chrome_label(name, args, ok, count)
-  if M.is_buffer_edit(name, args) then
-    return nil
-  end
   local n = M.short_name(name):lower()
   args = type(args) == "table" and args or {}
   local mark = status_mark(ok)
   local suffix = " " .. mark
   if count and count > 1 then
     suffix = suffix .. string.format(" ×%d", count)
+  end
+
+  if M.is_buffer_edit(name, args) then
+    local rel = args.path or args.file or args.filename
+    if rel and tostring(rel) ~= "" then
+      local path = M.edit_path_label(rel)
+      return M.edit_verb(name, args) .. " · " .. path .. suffix
+    end
+    return M.edit_verb(name, args) .. suffix
   end
 
   if n:find("subagent", 1, true) then
@@ -181,6 +217,16 @@ function M.chrome_omit_keys(name, args)
   local n = M.short_name(name):lower()
   args = type(args) == "table" and args or {}
   local omit = {}
+  if M.is_buffer_edit(name, args) then
+    omit.path = true
+    omit.file = true
+    omit.filename = true
+    -- Content lives in mini-diff; keep old/new out of the live placeholder.
+    omit.old_text = true
+    omit.new_text = true
+    omit.content = true
+    return omit
+  end
   if n:find("subagent", 1, true) then
     omit.agent = true
     omit.name = true

@@ -75,6 +75,7 @@ for _, m in ipairs(h.box_marks(chat, h.last_box_ns(chat))) do
   end
 end
 h.assert_truthy(top:find("diff_todo", 1, true) or top:find("_diff_todo", 1, true), "chrome label path: " .. top)
+h.assert_truthy(top:find("edit ·", 1, true) or top:find("edit", 1, true), "chrome has edit verb: " .. top)
 h.assert_truthy(top:find("<C-r> full diff", 1, true), "chrome C-r hint: " .. top)
 h.assert_false(top:find("replace_in_buffer", 1, true), "tool name not on chrome: " .. top)
 

@@ -19,7 +19,12 @@ local bash = tools.chrome_label("bash", { command = "cat > todo.md <<'EOF'\nhi\n
 h.assert_truthy(bash:find("%$ cat", 1) or bash:find("$ cat", 1, true), "bash $ cmd: " .. tostring(bash))
 h.assert_truthy(bash:find("✗", 1, true), "bash fail mark")
 
-h.assert_eq(tools.chrome_label("nvim_replace_in_buffer", { path = "x", old_text = "a", new_text = "b" }, true), nil, "edit skips chrome_label")
+local edit_lbl = tools.chrome_label("nvim_replace_in_buffer", { path = "x", old_text = "a", new_text = "b" }, true)
+h.assert_truthy(edit_lbl:find("edit ·", 1, true), "edit verb on chrome: " .. tostring(edit_lbl))
+h.assert_truthy(edit_lbl:find("x", 1, true), "edit path on chrome: " .. tostring(edit_lbl))
+local write_lbl = tools.chrome_label("nvim_write", { path = "todo2.md", content = "# Todo\n" }, true)
+h.assert_truthy(write_lbl:find("write ·", 1, true), "write verb on chrome: " .. tostring(write_lbl))
+h.assert_truthy(write_lbl:find("todo2", 1, true), "write path on chrome: " .. tostring(write_lbl))
 
 -- universal fallback: any non-edit tool gets a chrome summary
 local webfetch = tools.chrome_label("web_fetch", { url = "https://example.com/docs" }, true)

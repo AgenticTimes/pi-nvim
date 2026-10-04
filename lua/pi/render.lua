@@ -1531,8 +1531,8 @@ local function apply_tool_chrome(buf, name, args, ok, count)
   paint_box(b)
 end
 
---- Put filename in the top-rule label and mark box for <C-r> hint.
-local function apply_edit_chrome(buf, rel)
+--- Put "write|edit · path" in the top-rule label and mark box for <C-r> hint.
+local function apply_edit_chrome(buf, rel, name, args, ok, count)
   if not rel or rel == "" then
     return
   end
@@ -1552,9 +1552,17 @@ local function apply_edit_chrome(buf, rel)
   end
   b.edit_review = true
   local s = vim.tbl_extend("force", {}, b.style or STYLES.tool)
-  local label = tostring(rel)
-  if vim.fn.strdisplaywidth(label) > 28 then
-    label = vim.fn.fnamemodify(label, ":t")
+  local path = Rtools.edit_path_label(rel)
+  local verb = Rtools.edit_verb(name, args)
+  local label = verb .. " · " .. path
+  if ok ~= nil then
+    label = label .. (ok and " ✓" or " ✗")
+  end
+  if count and count > 1 then
+    label = label .. string.format(" ×%d", count)
+  end
+  if vim.fn.strdisplaywidth(label) > 48 then
+    label = vim.fn.strcharpart(label, 0, 47) .. "…"
   end
   s.label = label
   b.style = s
@@ -1777,7 +1785,7 @@ local function upsert_tool_end(buf, name, args, ok, err, meta)
       end
       note_tool_lines(buf, last_tool.start_line, last_tool.start_line + new_n - 1)
       attach_tool_payload(buf, full, expanded, false)
-      apply_edit_chrome(buf, edit_rel)
+      apply_edit_chrome(buf, edit_rel, name, args, ok, last_tool.count)
       if not edit_rel then
         apply_tool_chrome(buf, name, args, ok, last_tool.count)
       end
@@ -1806,7 +1814,7 @@ local function upsert_tool_end(buf, name, args, ok, err, meta)
       expanded = want_expanded,
     }
     attach_tool_payload(buf, full, want_expanded, has_err)
-    apply_edit_chrome(buf, edit_rel)
+    apply_edit_chrome(buf, edit_rel, name, args, ok)
     if not edit_rel then
       apply_tool_chrome(buf, name, args, ok)
     end
@@ -1830,7 +1838,7 @@ local function upsert_tool_end(buf, name, args, ok, err, meta)
     expanded = want_expanded,
   }
   attach_tool_payload(buf, full, want_expanded, has_err)
-  apply_edit_chrome(buf, edit_rel)
+  apply_edit_chrome(buf, edit_rel, name, args, ok)
   if not edit_rel then
     apply_tool_chrome(buf, name, args, ok)
   end
